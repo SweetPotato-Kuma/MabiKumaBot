@@ -6,3 +6,4 @@ main.err
 main.log
 data/*.json
 !data/.gitkeep
+runtime/

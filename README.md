@@ -77,6 +77,13 @@ npm run deploy:commands
 npm start
 ```
 
+Windows에서는 더블클릭 실행기를 사용할 수 있습니다.
+
+- `start-bot.bat`: 봇 시작
+- `stop-bot.bat`: 봇 종료
+
+실행 로그는 `bot.log`, 오류 로그는 `bot.err`에 기록됩니다. 이미 실행 중이면 `start-bot.bat`는 중복 실행하지 않습니다.
+
 ## 명령
 
 `/구마` 하나만 사용합니다. 버튼 UI에서 다음 작업을 할 수 있습니다.
