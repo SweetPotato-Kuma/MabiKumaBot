@@ -138,7 +138,7 @@ export class PriceMonitor {
       }
 
       this.logger.info(
-        `${itemName}: lowest=${marketData.lowestPrice.toLocaleString("ko-KR")}, next=${marketData.nextPrice.toLocaleString(
+        `${itemName} -> ${marketData.resolvedItemName}: lowest=${marketData.lowestPrice.toLocaleString("ko-KR")}, next=${marketData.nextPrice.toLocaleString(
           "ko-KR",
         )}, discount=${formatPercent(marketData.discountRate)}`,
       );
@@ -185,7 +185,7 @@ export class PriceMonitor {
     }
 
     const embed = new EmbedBuilder()
-      .setTitle(`특가 알림: ${marketData.itemName}`)
+      .setTitle(`특가 알림: ${marketData.resolvedItemName}`)
       .setColor(0xe03131)
       .setDescription(`최저 등록가가 차순위 가격의 ${formatPercent(this.threshold)} 이하입니다.`)
       .addFields(
@@ -196,7 +196,7 @@ export class PriceMonitor {
       .setFooter({ text: `Nexon Open API 경매장 키워드 검색 기준` })
       .setTimestamp(new Date());
 
-    await channel.send({ content: `특가 후보를 찾았습니다: **${marketData.itemName}**`, embeds: [embed] });
+    await channel.send({ content: `특가 후보를 찾았습니다: **${marketData.resolvedItemName}**`, embeds: [embed] });
     this.lastAlertAtByItem.set(key, now);
     this.logger.info(`${marketData.itemName}: alert sent.`);
   }

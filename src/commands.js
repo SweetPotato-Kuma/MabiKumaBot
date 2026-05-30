@@ -116,8 +116,13 @@ function buildItemModal({ customId, title, label, placeholder }) {
 
 function buildMarketEmbed(marketData, threshold) {
   const isAlert = marketData.lowestPrice <= marketData.nextPrice * threshold;
+  const title =
+    marketData.resolvedItemName && marketData.resolvedItemName !== marketData.itemName
+      ? `경매장 가격 확인: ${marketData.itemName} → ${marketData.resolvedItemName}`
+      : `경매장 가격 확인: ${marketData.itemName}`;
+
   return new EmbedBuilder()
-    .setTitle(`경매장 가격 확인: ${marketData.itemName}`)
+    .setTitle(title)
     .setColor(isAlert ? 0xe03131 : 0x2f9e44)
     .addFields(
       { name: "최저 등록가", value: formatGold(marketData.lowestPrice), inline: true },
@@ -238,7 +243,11 @@ async function handleChatInputCommand(interaction, context) {
     const marketData = await mabinogiClient.fetchMarketData(itemName);
     if (!marketData.found) {
       await interaction.editReply(
-        `가격 정보를 충분히 찾지 못했습니다: ${itemName}\n검색 결과: ${marketData.rawCount}개, 이름 일치: ${marketData.matchingCount}개`,
+        [
+          `가격 정보를 충분히 찾지 못했습니다: ${itemName}`,
+          `검색 결과: ${marketData.rawCount}개, 이름 일치: ${marketData.matchingCount}개`,
+          `시도한 검색어: ${marketData.searchKeywords.join(", ")}`,
+        ].join("\n"),
       );
       return;
     }
