@@ -15,21 +15,26 @@ import { normalizeItemName } from "./itemStore.js";
 
 const ITEM_OPTION_NAME = "아이템";
 const ITEM_INPUT_ID = "itemName";
+const INTERVAL_INPUT_ID = "intervalSeconds";
+const MIN_INTERVAL_SECONDS = 1;
+const MAX_INTERVAL_SECONDS = 3600;
 
 const CUSTOM_ID = {
-  addButton: "register:add",
-  removeButton: "register:remove",
-  listButton: "register:list",
-  statusButton: "register:status",
-  alertChannelButton: "register:alert-channel",
-  addModal: "register:add-modal",
-  removeModal: "register:remove-modal",
+  addButton: "kuma:add",
+  removeButton: "kuma:remove",
+  listButton: "kuma:list",
+  statusButton: "kuma:status",
+  alertChannelButton: "kuma:alert-channel",
+  intervalButton: "kuma:interval",
+  addModal: "kuma:add-modal",
+  removeModal: "kuma:remove-modal",
+  intervalModal: "kuma:interval-modal",
 };
 
 export const commandBuilders = [
   new SlashCommandBuilder()
-    .setName("등록")
-    .setDescription("버튼 UI로 모니터링 아이템과 알림 채널을 관리합니다."),
+    .setName("구마")
+    .setDescription("버튼 UI로 모니터링 아이템, 알림 채널, 체크 간격을 관리합니다."),
   new SlashCommandBuilder()
     .setName("추가")
     .setDescription("마비노기 경매장 모니터링 아이템을 추가합니다.")
@@ -66,26 +71,32 @@ function buildRegistrationPanel(context) {
   const { itemStore, settingsStore, mabinogiClient } = context;
   const alertChannelId = settingsStore.getAlertChannelId();
   const items = itemStore.getAll();
+  const checkIntervalSeconds = Math.round(context.monitor.intervalMs / 1000);
 
   const embed = new EmbedBuilder()
-    .setTitle("마비노기 쿠마봇 등록 UI")
-    .setDescription("아래 버튼으로 모니터링 아이템과 알림 채널을 관리할 수 있습니다.")
+    .setTitle("마비노기 쿠마봇")
+    .setDescription("아래 버튼으로 모니터링 아이템, 알림 채널, 체크 간격을 관리할 수 있습니다.")
     .setColor(0x4c6ef5)
     .addFields(
       { name: "모니터링 아이템", value: items.length > 0 ? `${items.length}개 등록됨` : "아직 등록된 아이템이 없습니다.", inline: true },
       { name: "알림 채널", value: alertChannelId ? `<#${alertChannelId}>` : "미설정", inline: true },
+      { name: "체크 간격", value: `${checkIntervalSeconds}초`, inline: true },
       { name: "API 키", value: mabinogiClient.hasApiKey() ? "설정됨" : "미설정", inline: true },
     );
 
-  const row = new ActionRowBuilder().addComponents(
+  const firstRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(CUSTOM_ID.addButton).setLabel("아이템 추가").setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(CUSTOM_ID.removeButton).setLabel("아이템 제거").setStyle(ButtonStyle.Danger),
     new ButtonBuilder().setCustomId(CUSTOM_ID.listButton).setLabel("목록 보기").setStyle(ButtonStyle.Secondary),
+  );
+
+  const secondRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(CUSTOM_ID.alertChannelButton).setLabel("이 채널로 알림").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(CUSTOM_ID.intervalButton).setLabel("체크 간격").setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(CUSTOM_ID.statusButton).setLabel("상태").setStyle(ButtonStyle.Secondary),
   );
 
-  return { embeds: [embed], components: [row] };
+  return { embeds: [embed], components: [firstRow, secondRow] };
 }
 
 function buildItemModal({ customId, title, label, placeholder }) {
@@ -128,7 +139,7 @@ function buildStatusText(context) {
     `아이템 수: ${itemStore.getAll().length}`,
     `알림 채널: ${alertChannelId ? `<#${alertChannelId}>` : "미설정"}`,
     `마비노기 API 키: ${mabinogiClient.hasApiKey() ? "설정됨" : "미설정"}`,
-    `체크 간격: ${Math.round(config.checkIntervalMs / 1000)}초`,
+    `체크 간격: ${Math.round(monitor.intervalMs / 1000)}초`,
     `알림 기준: 차순위 가격의 ${formatPercent(config.alertDiscountThreshold)} 이하`,
     `마지막 체크: ${formatDateTime(status.lastRunAt)}`,
     `다음 체크: ${formatDateTime(status.nextRunAt)}`,
@@ -150,7 +161,7 @@ async function handleChatInputCommand(interaction, context) {
   const { commandName } = interaction;
   const { itemStore, settingsStore, mabinogiClient, monitor, config } = context;
 
-  if (commandName === "등록") {
+  if (commandName === "구마") {
     await interaction.reply(privateReply(buildRegistrationPanel(context)));
     return;
   }
@@ -275,11 +286,50 @@ async function handleButton(interaction, context) {
 
   if (interaction.customId === CUSTOM_ID.alertChannelButton) {
     await setCurrentChannelAsAlert(interaction, settingsStore);
+    return;
+  }
+
+  if (interaction.customId === CUSTOM_ID.intervalButton) {
+    const input = new TextInputBuilder()
+      .setCustomId(INTERVAL_INPUT_ID)
+      .setLabel("체크 간격(초)")
+      .setPlaceholder("예: 10")
+      .setValue(String(Math.round(context.monitor.intervalMs / 1000)))
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true)
+      .setMinLength(1)
+      .setMaxLength(4);
+
+    await interaction.showModal(
+      new ModalBuilder()
+        .setCustomId(CUSTOM_ID.intervalModal)
+        .setTitle("체크 간격 설정")
+        .addComponents(new ActionRowBuilder().addComponents(input)),
+    );
   }
 }
 
 async function handleModalSubmit(interaction, context) {
-  const { itemStore, monitor } = context;
+  const { itemStore, settingsStore, monitor } = context;
+
+  if (interaction.customId === CUSTOM_ID.intervalModal) {
+    const rawSeconds = interaction.fields.getTextInputValue(INTERVAL_INPUT_ID).trim();
+    const intervalSeconds = Number(rawSeconds);
+
+    if (!Number.isInteger(intervalSeconds) || intervalSeconds < MIN_INTERVAL_SECONDS || intervalSeconds > MAX_INTERVAL_SECONDS) {
+      await interaction.reply(
+        privateReply(`체크 간격은 ${MIN_INTERVAL_SECONDS}초부터 ${MAX_INTERVAL_SECONDS}초까지의 정수로 입력해 주세요.`),
+      );
+      return;
+    }
+
+    const intervalMs = intervalSeconds * 1000;
+    await settingsStore.setCheckIntervalMs(intervalMs);
+    monitor.setIntervalMs(intervalMs);
+    await interaction.reply(privateReply(`체크 간격을 ${intervalSeconds}초로 설정했습니다.`));
+    return;
+  }
+
   const itemName = normalizeItemName(interaction.fields.getTextInputValue(ITEM_INPUT_ID));
 
   if (interaction.customId === CUSTOM_ID.addModal) {

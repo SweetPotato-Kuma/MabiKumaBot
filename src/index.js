@@ -40,7 +40,7 @@ async function main() {
     mabinogiClient,
     itemStore,
     resolveChannel: resolveAlertChannel,
-    intervalMs: config.checkIntervalMs,
+    intervalMs: settingsStore.getCheckIntervalMs(config.checkIntervalMs),
     threshold: config.alertDiscountThreshold,
     cooldownMs: config.alertCooldownMs,
     logger,

@@ -74,7 +74,7 @@ export function getConfig({ requireClientId = false } = {}) {
     discordChannelId: readString("DISCORD_CHANNEL_ID"),
     mabinogiApiKey: readString("MABINOGI_API_KEY") || readString("API_KEY"),
     initialItems: parseCsv(readString("MABINOGI_ITEMS")),
-    checkIntervalMs: readNumber("CHECK_INTERVAL_SECONDS", 60, { min: 1 }) * 1000,
+    checkIntervalMs: readNumber("CHECK_INTERVAL_SECONDS", 10, { min: 1 }) * 1000,
     requestTimeoutMs: readNumber("REQUEST_TIMEOUT_SECONDS", 10, { min: 1 }) * 1000,
     alertDiscountThreshold: readNumber("ALERT_DISCOUNT_THRESHOLD", 0.1, { min: 0, max: 1 }),
     alertCooldownMs: readNumber("ALERT_COOLDOWN_SECONDS", 3600, { min: 0 }) * 1000,

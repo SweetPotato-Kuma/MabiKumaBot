@@ -10,7 +10,7 @@ discord.js v14 방식에 맞춰 슬래시 명령 기반으로 구성했습니다
 - 등록된 아이템의 최저가와 차순위 가격 주기적 비교
 - 최저가가 차순위 가격의 `ALERT_DISCOUNT_THRESHOLD` 이하이면 Discord 알림 전송
 - `/추가`, `/제거`, `/목록`, `/상태`, `/가격확인`, `/알림채널` 슬래시 명령 지원
-- `/등록` 버튼 UI로 아이템 추가/제거, 목록 확인, 알림 채널 설정 지원
+- `/구마` 버튼 UI로 아이템 추가/제거, 목록 확인, 알림 채널 설정, 체크 간격 설정 지원
 - 아이템 목록을 `data/items.json`에 저장
 - 알림 채널을 Discord 명령으로 설정하고 `data/settings.json`에 저장
 - 같은 특가가 반복 알림되지 않도록 쿨다운 적용
@@ -53,7 +53,7 @@ cp .env.example .env
 - `DISCORD_BOT_TOKEN`: `TOKEN` 대신 사용할 수 있는 Discord 봇 토큰 변수명
 - `DISCORD_CHANNEL_ID`: 시작 시 미리 지정할 알림 채널 ID. 비워 두고 `/알림채널 설정`으로 지정해도 됩니다.
 - `MABINOGI_ITEMS`: `data/items.json`이 없을 때 최초로 가져올 아이템 목록
-- `CHECK_INTERVAL_SECONDS`: 가격 체크 간격, 기본값 `60`
+- `CHECK_INTERVAL_SECONDS`: 가격 체크 간격, 기본값 `10`
 - `REQUEST_TIMEOUT_SECONDS`: Nexon API 요청 타임아웃, 기본값 `10`
 - `ALERT_DISCOUNT_THRESHOLD`: 특가 판단 기준, 기본값 `0.1`
 - `ALERT_COOLDOWN_SECONDS`: 같은 아이템 반복 알림 쿨다운, 기본값 `3600`
@@ -83,7 +83,7 @@ npm start
 - `/제거 아이템:<이름>`: 모니터링 아이템 제거
 - `/목록`: 현재 모니터링 목록 확인
 - `/상태`: 봇 모니터링 루프 상태 확인
-- `/등록`: 버튼 UI로 모니터링 아이템과 알림 채널 관리
+- `/구마`: 버튼 UI로 모니터링 아이템, 알림 채널, 체크 간격 관리
 - `/알림채널 설정`: 현재 채널을 특가 알림 채널로 저장
 - `/알림채널 보기`: 현재 특가 알림 채널 확인
 - `/알림채널 해제`: 특가 알림 채널 설정 해제

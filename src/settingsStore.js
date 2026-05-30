@@ -29,9 +29,21 @@ export class SettingsStore {
     return this.settings.alertChannelId ?? "";
   }
 
+  getCheckIntervalMs(fallbackMs) {
+    this.assertLoaded();
+    const value = Number(this.settings.checkIntervalMs);
+    return Number.isFinite(value) && value >= 1000 ? value : fallbackMs;
+  }
+
   async setAlertChannelId(channelId) {
     this.assertLoaded();
     this.settings.alertChannelId = channelId;
+    await this.save();
+  }
+
+  async setCheckIntervalMs(intervalMs) {
+    this.assertLoaded();
+    this.settings.checkIntervalMs = intervalMs;
     await this.save();
   }
 

@@ -59,6 +59,19 @@ export class PriceMonitor {
     this.lastAlertAtByItem.delete(itemName.toLocaleLowerCase("ko-KR"));
   }
 
+  setIntervalMs(intervalMs) {
+    this.intervalMs = intervalMs;
+    this.logger.info(`Price monitor interval updated. interval=${Math.round(this.intervalMs / 1000)}s`);
+
+    if (this.running && !this.checking) {
+      if (this.timer) {
+        clearTimeout(this.timer);
+        this.timer = null;
+      }
+      this.schedule(this.intervalMs);
+    }
+  }
+
   schedule(delayMs) {
     if (!this.running) {
       return;
