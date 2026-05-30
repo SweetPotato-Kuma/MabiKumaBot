@@ -39,13 +39,14 @@ cp .env.example .env
 필수 값:
 
 - `MABINOGI_API_KEY`: Nexon Open API 키
-- `DISCORD_BOT_TOKEN`: Discord 봇 토큰
+- `TOKEN`: Discord 봇 토큰
 - `DISCORD_CLIENT_ID`: Discord 애플리케이션 ID
 - `DISCORD_CHANNEL_ID`: 특가 알림을 받을 채널 ID
 
 선택 값:
 
 - `DISCORD_GUILD_ID`: 개발 중 특정 서버에만 명령을 등록할 때 사용
+- `DISCORD_BOT_TOKEN`: `TOKEN` 대신 사용할 수 있는 Discord 봇 토큰 변수명
 - `MABINOGI_ITEMS`: `data/items.json`이 없을 때 최초로 가져올 아이템 목록
 - `CHECK_INTERVAL_SECONDS`: 가격 체크 간격, 기본값 `60`
 - `REQUEST_TIMEOUT_SECONDS`: Nexon API 요청 타임아웃, 기본값 `10`

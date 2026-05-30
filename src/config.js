@@ -39,6 +39,14 @@ function readBoolean(name, fallback = false) {
   return ["1", "true", "yes", "y", "on"].includes(raw);
 }
 
+function readDiscordToken() {
+  const token = readString("DISCORD_BOT_TOKEN") || readString("TOKEN");
+  if (!token) {
+    throw new ConfigError("DISCORD_BOT_TOKEN 또는 TOKEN 환경 변수가 필요합니다.");
+  }
+  return token;
+}
+
 function parseCsv(raw) {
   return raw
     .split(",")
@@ -60,7 +68,7 @@ export function getConfig({ requireClientId = false } = {}) {
     projectRoot,
     dataDir: path.join(projectRoot, "data"),
     itemsFile: path.join(projectRoot, "data", "items.json"),
-    discordToken: readRequiredString("DISCORD_BOT_TOKEN"),
+    discordToken: readDiscordToken(),
     discordClientId: clientId,
     discordGuildId: readString("DISCORD_GUILD_ID"),
     discordChannelId: readRequiredString("DISCORD_CHANNEL_ID"),
@@ -77,4 +85,3 @@ export function getConfig({ requireClientId = false } = {}) {
     ),
   };
 }
-
