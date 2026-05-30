@@ -148,9 +148,22 @@ export class PriceMonitor {
       return;
     }
 
-    const channel = await this.resolveChannel();
+    let channel = null;
+    try {
+      channel = await this.resolveChannel();
+    } catch (error) {
+      this.logger.warn(`Alert skipped: failed to resolve alert channel. ${error.message}`);
+      return;
+    }
+
+    if (!channel) {
+      this.logger.warn("Alert skipped: no alert channel configured. Use /알림채널 설정 in Discord.");
+      return;
+    }
+
     if (!channel?.isTextBased()) {
-      throw new Error("Configured Discord alert channel is not text-based.");
+      this.logger.warn("Alert skipped: configured Discord alert channel is not text-based.");
+      return;
     }
 
     const embed = new EmbedBuilder()
@@ -170,4 +183,3 @@ export class PriceMonitor {
     this.logger.info(`${marketData.itemName}: alert sent.`);
   }
 }
-

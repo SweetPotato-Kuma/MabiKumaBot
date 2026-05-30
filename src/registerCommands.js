@@ -14,3 +14,16 @@ export async function registerCommands(config, log) {
   log.info(`Discord slash commands registered (${applicationCommands.length} commands, ${scope}).`);
 }
 
+export async function registerCommandsWithClient(client, config, log) {
+  const scope = config.discordGuildId ? `guild ${config.discordGuildId}` : "global";
+  log.info(`Discord slash commands registering (${scope})...`);
+
+  if (config.discordGuildId) {
+    const guild = await client.guilds.fetch(config.discordGuildId);
+    await guild.commands.set(applicationCommands);
+  } else {
+    await client.application.commands.set(applicationCommands);
+  }
+
+  log.info(`Discord slash commands registered (${applicationCommands.length} commands, ${scope}).`);
+}

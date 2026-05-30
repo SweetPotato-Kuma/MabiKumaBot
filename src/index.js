@@ -6,12 +6,18 @@ import { ItemStore } from "./itemStore.js";
 import { logger } from "./logger.js";
 import { MabinogiClient } from "./mabinogiApi.js";
 import { PriceMonitor } from "./monitor.js";
-import { registerCommands } from "./registerCommands.js";
+import { registerCommandsWithClient } from "./registerCommands.js";
+import { SettingsStore } from "./settingsStore.js";
 
 async function main() {
   const config = getConfig();
   const itemStore = new ItemStore({ filePath: config.itemsFile, initialItems: config.initialItems });
   await itemStore.load();
+  const settingsStore = new SettingsStore({
+    filePath: config.settingsFile,
+    initialSettings: config.discordChannelId ? { alertChannelId: config.discordChannelId } : {},
+  });
+  await settingsStore.load();
 
   const discordClient = new Client({ intents: [GatewayIntentBits.Guilds] });
   const mabinogiClient = new MabinogiClient({
@@ -21,8 +27,13 @@ async function main() {
   });
 
   const resolveAlertChannel = async () => {
-    const cached = discordClient.channels.cache.get(config.discordChannelId);
-    return cached ?? discordClient.channels.fetch(config.discordChannelId);
+    const alertChannelId = settingsStore.getAlertChannelId();
+    if (!alertChannelId) {
+      return null;
+    }
+
+    const cached = discordClient.channels.cache.get(alertChannelId);
+    return cached ?? discordClient.channels.fetch(alertChannelId);
   };
 
   const monitor = new PriceMonitor({
@@ -40,7 +51,7 @@ async function main() {
 
     if (config.autoDeployCommands) {
       try {
-        await registerCommands(config, logger);
+        await registerCommandsWithClient(readyClient, config, logger);
       } catch (error) {
         logger.error("Automatic slash command registration failed:", error);
       }
@@ -54,6 +65,7 @@ async function main() {
       await handleInteraction(interaction, {
         config,
         itemStore,
+        settingsStore,
         mabinogiClient,
         monitor,
       });

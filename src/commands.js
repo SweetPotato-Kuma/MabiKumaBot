@@ -17,6 +17,12 @@ export const commandBuilders = [
   new SlashCommandBuilder().setName("목록").setDescription("현재 모니터링 중인 아이템 목록을 봅니다."),
   new SlashCommandBuilder().setName("상태").setDescription("봇과 모니터링 루프 상태를 확인합니다."),
   new SlashCommandBuilder()
+    .setName("알림채널")
+    .setDescription("특가 알림을 보낼 Discord 채널을 설정하거나 확인합니다.")
+    .addSubcommand((subcommand) => subcommand.setName("설정").setDescription("현재 채널을 특가 알림 채널로 설정합니다."))
+    .addSubcommand((subcommand) => subcommand.setName("보기").setDescription("현재 특가 알림 채널을 확인합니다."))
+    .addSubcommand((subcommand) => subcommand.setName("해제").setDescription("특가 알림 채널 설정을 해제합니다.")),
+  new SlashCommandBuilder()
     .setName("가격확인")
     .setDescription("아이템의 현재 경매장 최저가와 차순위 가격을 확인합니다.")
     .addStringOption((option) => option.setName(ITEM_OPTION_NAME).setDescription("확인할 아이템 이름").setRequired(true)),
@@ -53,7 +59,7 @@ export async function handleInteraction(interaction, context) {
   }
 
   const { commandName } = interaction;
-  const { itemStore, mabinogiClient, monitor, config } = context;
+  const { itemStore, settingsStore, mabinogiClient, monitor, config } = context;
 
   if (commandName === "추가") {
     const itemName = normalizeItemName(interaction.options.getString(ITEM_OPTION_NAME, true));
@@ -91,11 +97,13 @@ export async function handleInteraction(interaction, context) {
 
   if (commandName === "상태") {
     const status = monitor.getStatus();
+    const alertChannelId = settingsStore.getAlertChannelId();
     await interaction.reply(
       privateReply(
         [
           `상태: ${status.running ? "실행 중" : "중지됨"}`,
           `아이템 수: ${itemStore.getAll().length}`,
+          `알림 채널: ${alertChannelId ? `<#${alertChannelId}>` : "미설정"}`,
           `체크 간격: ${Math.round(config.checkIntervalMs / 1000)}초`,
           `알림 기준: 차순위 가격의 ${formatPercent(config.alertDiscountThreshold)} 이하`,
           `마지막 체크: ${formatDateTime(status.lastRunAt)}`,
@@ -105,6 +113,33 @@ export async function handleInteraction(interaction, context) {
       ),
     );
     return;
+  }
+
+  if (commandName === "알림채널") {
+    const subcommand = interaction.options.getSubcommand();
+
+    if (subcommand === "설정") {
+      if (!interaction.channel?.isTextBased()) {
+        await interaction.reply(privateReply("텍스트를 보낼 수 있는 채널에서만 알림 채널을 설정할 수 있습니다."));
+        return;
+      }
+
+      await settingsStore.setAlertChannelId(interaction.channelId);
+      await interaction.reply(privateReply(`알림 채널을 설정했습니다: <#${interaction.channelId}>`));
+      return;
+    }
+
+    if (subcommand === "보기") {
+      const alertChannelId = settingsStore.getAlertChannelId();
+      await interaction.reply(privateReply(alertChannelId ? `현재 알림 채널: <#${alertChannelId}>` : "알림 채널이 아직 설정되지 않았습니다."));
+      return;
+    }
+
+    if (subcommand === "해제") {
+      await settingsStore.clearAlertChannelId();
+      await interaction.reply(privateReply("알림 채널 설정을 해제했습니다."));
+      return;
+    }
   }
 
   if (commandName === "가격확인") {
@@ -122,4 +157,3 @@ export async function handleInteraction(interaction, context) {
     await interaction.editReply({ embeds: [buildMarketEmbed(marketData, config.alertDiscountThreshold)] });
   }
 }
-
