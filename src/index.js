@@ -1,0 +1,93 @@
+import { Client, Events, GatewayIntentBits, MessageFlags } from "discord.js";
+
+import { handleInteraction } from "./commands.js";
+import { ConfigError, getConfig } from "./config.js";
+import { ItemStore } from "./itemStore.js";
+import { logger } from "./logger.js";
+import { MabinogiClient } from "./mabinogiApi.js";
+import { PriceMonitor } from "./monitor.js";
+import { registerCommands } from "./registerCommands.js";
+
+async function main() {
+  const config = getConfig();
+  const itemStore = new ItemStore({ filePath: config.itemsFile, initialItems: config.initialItems });
+  await itemStore.load();
+
+  const discordClient = new Client({ intents: [GatewayIntentBits.Guilds] });
+  const mabinogiClient = new MabinogiClient({
+    apiKey: config.mabinogiApiKey,
+    endpoint: config.nexonApiEndpoint,
+    timeoutMs: config.requestTimeoutMs,
+  });
+
+  const resolveAlertChannel = async () => {
+    const cached = discordClient.channels.cache.get(config.discordChannelId);
+    return cached ?? discordClient.channels.fetch(config.discordChannelId);
+  };
+
+  const monitor = new PriceMonitor({
+    mabinogiClient,
+    itemStore,
+    resolveChannel: resolveAlertChannel,
+    intervalMs: config.checkIntervalMs,
+    threshold: config.alertDiscountThreshold,
+    cooldownMs: config.alertCooldownMs,
+    logger,
+  });
+
+  discordClient.once(Events.ClientReady, async (readyClient) => {
+    logger.info(`Logged in as ${readyClient.user.tag}.`);
+
+    if (config.autoDeployCommands) {
+      try {
+        await registerCommands(config, logger);
+      } catch (error) {
+        logger.error("Automatic slash command registration failed:", error);
+      }
+    }
+
+    monitor.start();
+  });
+
+  discordClient.on(Events.InteractionCreate, async (interaction) => {
+    try {
+      await handleInteraction(interaction, {
+        config,
+        itemStore,
+        mabinogiClient,
+        monitor,
+      });
+    } catch (error) {
+      logger.error("Interaction handling failed:", error);
+
+      const payload = { content: "명령 처리 중 오류가 발생했습니다. 로그를 확인해 주세요.", flags: MessageFlags.Ephemeral };
+      if (interaction.deferred || interaction.replied) {
+        await interaction.followUp(payload).catch(() => {});
+      } else {
+        await interaction.reply(payload).catch(() => {});
+      }
+    }
+  });
+
+  const shutdown = () => {
+    logger.info("Shutdown requested.");
+    monitor.stop();
+    discordClient.destroy();
+  };
+
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
+
+  await discordClient.login(config.discordToken);
+}
+
+try {
+  await main();
+} catch (error) {
+  if (error instanceof ConfigError) {
+    logger.error(error.message);
+  } else {
+    logger.error(error);
+  }
+  process.exitCode = 1;
+}

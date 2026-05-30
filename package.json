@@ -1,0 +1,19 @@
+{
+  "name": "mabinogi-kuma-bot",
+  "version": "0.1.0",
+  "description": "Mabinogi auction price monitor Discord bot built with discord.js.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "deploy:commands": "node src/deploy-commands.js",
+    "check": "node --check src/index.js && node --check src/deploy-commands.js"
+  },
+  "dependencies": {
+    "discord.js": "14.26.4"
+  }
+}
