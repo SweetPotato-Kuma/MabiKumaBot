@@ -1,5 +1,5 @@
 {
-  "name": "mabinogi-kuma-bot",
+  "name": "mabinogi-guma-bot",
   "version": "0.1.0",
   "description": "Mabinogi auction price monitor Discord bot built with discord.js.",
   "type": "module",

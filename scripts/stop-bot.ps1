@@ -2,11 +2,11 @@ $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $PSScriptRoot
 $RuntimeDir = Join-Path $Root "runtime"
-$PidFile = Join-Path $RuntimeDir "kuma-bot.pid"
+$PidFile = Join-Path $RuntimeDir "guma-bot.pid"
 $EntryFile = Join-Path $Root "src\index.js"
 
 function Write-Info($Message) {
-  Write-Host "[MabiKumaBot] $Message"
+  Write-Host "[MabiGumaBot] $Message"
 }
 
 function Get-BotProcesses {

@@ -1,0 +1,18 @@
+[Unit]
+Description=Mabinogi Guma Bot Discord Service
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/mabinogi-guma-bot
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node /home/ubuntu/mabinogi-guma-bot/src/index.js
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/ubuntu/mabinogi-guma-bot/main.log
+StandardError=append:/home/ubuntu/mabinogi-guma-bot/main.err
+
+[Install]
+WantedBy=multi-user.target

@@ -2,14 +2,14 @@ $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $PSScriptRoot
 $RuntimeDir = Join-Path $Root "runtime"
-$PidFile = Join-Path $RuntimeDir "kuma-bot.pid"
+$PidFile = Join-Path $RuntimeDir "guma-bot.pid"
 $LogFile = Join-Path $Root "bot.log"
 $ErrFile = Join-Path $Root "bot.err"
 $EntryFile = Join-Path $Root "src\index.js"
 $NodeModules = Join-Path $Root "node_modules\discord.js"
 
 function Write-Info($Message) {
-  Write-Host "[MabiKumaBot] $Message"
+  Write-Host "[MabiGumaBot] $Message"
 }
 
 function Get-NodeExe {
