@@ -6,7 +6,6 @@ import {
   MessageFlags,
   ModalBuilder,
   SlashCommandBuilder,
-  StringSelectMenuBuilder,
   TextInputBuilder,
   TextInputStyle,
 } from "discord.js";
@@ -14,7 +13,7 @@ import {
 import { formatDateTime, formatGold, formatItemList, formatPercent } from "./format.js";
 import { normalizeItemName } from "./itemStore.js";
 
-const ITEMS_PER_PAGE = 25;
+const ITEMS_PER_PAGE = 20;
 const ITEM_INPUT_ID = "itemName";
 const INTERVAL_INPUT_ID = "intervalSeconds";
 const MIN_INTERVAL_SECONDS = 1;
@@ -54,13 +53,21 @@ function clampPage(page, totalPages) {
   return Math.max(0, Math.min(page, Math.max(0, totalPages - 1)));
 }
 
-function truncateOptionText(text, maxLength = 100) {
+function truncateButtonLabel(text, maxLength = 80) {
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
 }
 
 function parsePageFromCustomId(customId, prefix) {
   const page = Number(customId.slice(prefix.length + 1));
   return Number.isInteger(page) && page >= 0 ? page : 0;
+}
+
+function parseListDeleteCustomId(customId) {
+  const [, , page, index] = customId.split(":");
+  return {
+    page: Number.isInteger(Number(page)) ? Number(page) : 0,
+    index: Number.isInteger(Number(index)) ? Number(index) : -1,
+  };
 }
 
 function buildMainPanel(context) {
@@ -120,22 +127,21 @@ function buildListPanel(context, page = 0, notice = "") {
   const components = [];
 
   if (visibleItems.length > 0) {
-    components.push(
-      new ActionRowBuilder().addComponents(
-        new StringSelectMenuBuilder()
-          .setCustomId(`${CUSTOM_ID.listDeletePrefix}:${currentPage}`)
-          .setPlaceholder("삭제할 아이템을 선택하세요.")
-          .setMinValues(1)
-          .setMaxValues(visibleItems.length)
-          .addOptions(
-            visibleItems.map((item, index) => ({
-              label: truncateOptionText(item),
-              value: String(start + index),
-              description: "선택하면 목록에서 삭제됩니다.",
-            })),
-          ),
-      ),
-    );
+    for (let rowStart = 0; rowStart < visibleItems.length; rowStart += 5) {
+      const rowItems = visibleItems.slice(rowStart, rowStart + 5);
+      components.push(
+        new ActionRowBuilder().addComponents(
+          rowItems.map((item, index) => {
+            const absoluteIndex = start + rowStart + index;
+            const label = truncateButtonLabel(`${absoluteIndex + 1}. ${item} X`);
+            return new ButtonBuilder()
+              .setCustomId(`${CUSTOM_ID.listDeletePrefix}:${currentPage}:${absoluteIndex}`)
+              .setLabel(label)
+              .setStyle(ButtonStyle.Danger);
+          }),
+        ),
+      );
+    }
   }
 
   if (totalPages > 1) {
@@ -290,6 +296,27 @@ async function handleButton(interaction, context) {
     return;
   }
 
+  if (interaction.customId.startsWith(`${CUSTOM_ID.listDeletePrefix}:`)) {
+    const { page, index } = parseListDeleteCustomId(interaction.customId);
+    const itemName = itemStore.getAll()[index];
+
+    if (!itemName) {
+      await interaction.update(buildListPanel(context, page, "삭제할 항목을 찾지 못했습니다. 목록을 다시 열어 주세요."));
+      return;
+    }
+
+    const result = await itemStore.removeMany([itemName]);
+    for (const removedItem of result.removedItems) {
+      context.monitor.clearCooldown(removedItem);
+    }
+
+    const totalPages = Math.max(1, Math.ceil(result.items.length / ITEMS_PER_PAGE));
+    const nextPage = clampPage(page, totalPages);
+    const notice = result.removed ? `삭제 완료: ${result.removedItems.join(", ")}` : "삭제할 항목을 찾지 못했습니다.";
+    await interaction.update(buildListPanel(context, nextPage, notice));
+    return;
+  }
+
   if (interaction.customId === CUSTOM_ID.statusButton) {
     await interaction.reply(privateReply(buildStatusText(context)));
     return;
@@ -330,29 +357,6 @@ async function handleButton(interaction, context) {
       }),
     );
   }
-}
-
-async function handleSelectMenu(interaction, context) {
-  if (!interaction.customId.startsWith(`${CUSTOM_ID.listDeletePrefix}:`)) {
-    return;
-  }
-
-  const page = parsePageFromCustomId(interaction.customId, CUSTOM_ID.listDeletePrefix);
-  const items = context.itemStore.getAll();
-  const selectedItems = interaction.values.map((value) => items[Number(value)]).filter(Boolean);
-  const result = await context.itemStore.removeMany(selectedItems);
-
-  for (const itemName of result.removedItems) {
-    context.monitor.clearCooldown(itemName);
-  }
-
-  const totalPages = Math.max(1, Math.ceil(result.items.length / ITEMS_PER_PAGE));
-  const nextPage = clampPage(page, totalPages);
-  const notice = result.removed
-    ? `삭제 완료: ${result.removedItems.join(", ")}`
-    : "삭제할 항목을 찾지 못했습니다.";
-
-  await interaction.update(buildListPanel(context, nextPage, notice));
 }
 
 async function handleModalSubmit(interaction, context) {
@@ -429,11 +433,6 @@ export async function handleInteraction(interaction, context) {
 
   if (interaction.isButton()) {
     await handleButton(interaction, context);
-    return;
-  }
-
-  if (interaction.isStringSelectMenu()) {
-    await handleSelectMenu(interaction, context);
     return;
   }
 
