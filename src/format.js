@@ -25,4 +25,3 @@ export function formatItemList(items) {
 
   return items.map((item, index) => `${index + 1}. ${item}`).join("\n");
 }
-

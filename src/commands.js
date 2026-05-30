@@ -16,8 +16,11 @@ import { normalizeItemName } from "./itemStore.js";
 const ITEMS_PER_PAGE = 20;
 const ITEM_INPUT_ID = "itemName";
 const INTERVAL_INPUT_ID = "intervalSeconds";
+const ALERT_DISCOUNT_INPUT_ID = "alertDiscountPercent";
 const MIN_INTERVAL_SECONDS = 1;
 const MAX_INTERVAL_SECONDS = 3600;
+const MIN_ALERT_DISCOUNT_PERCENT = 10;
+const MAX_ALERT_DISCOUNT_PERCENT = 100;
 
 const CUSTOM_ID = {
   addButton: "kuma:add",
@@ -26,12 +29,14 @@ const CUSTOM_ID = {
   statusButton: "kuma:status",
   alertChannelButton: "kuma:alert-channel",
   intervalButton: "kuma:interval",
+  thresholdButton: "kuma:threshold",
   priceButton: "kuma:price",
   listPagePrefix: "kuma:list-page",
   listDeletePrefix: "kuma:list-delete",
   addModal: "kuma:add-modal",
   removeModal: "kuma:remove-modal",
   intervalModal: "kuma:interval-modal",
+  thresholdModal: "kuma:threshold-modal",
   priceModal: "kuma:price-modal",
 };
 
@@ -70,19 +75,32 @@ function parseListDeleteCustomId(customId) {
   };
 }
 
+function getDefaultAlertDiscountPercent(config) {
+  const percent = Math.round(Number(config.alertDiscountThreshold) * 100);
+  return Number.isInteger(percent) && percent >= MIN_ALERT_DISCOUNT_PERCENT && percent <= MAX_ALERT_DISCOUNT_PERCENT
+    ? percent
+    : MIN_ALERT_DISCOUNT_PERCENT;
+}
+
+function getAlertDiscountPercent(context) {
+  return context.settingsStore.getAlertDiscountPercent(context.userId, getDefaultAlertDiscountPercent(context.config));
+}
+
 function buildMainPanel(context) {
-  const { itemStore, settingsStore, mabinogiClient } = context;
-  const alertChannelId = settingsStore.getAlertChannelId();
-  const items = itemStore.getAll();
+  const { itemStore, settingsStore, mabinogiClient, userId } = context;
+  const alertChannelId = settingsStore.getAlertChannelId(userId);
+  const alertDiscountPercent = getAlertDiscountPercent(context);
+  const items = itemStore.getAll(userId);
   const checkIntervalSeconds = Math.round(context.monitor.intervalMs / 1000);
 
   const embed = new EmbedBuilder()
     .setTitle("마비노기 쿠마봇")
-    .setDescription("아래 버튼으로 모니터링 아이템, 알림 채널, 체크 간격을 관리할 수 있습니다.")
+    .setDescription("아래 버튼으로 내 모니터링 아이템, 알림 채널, 알림 기준, 체크 간격을 관리할 수 있습니다.")
     .setColor(0x4c6ef5)
     .addFields(
-      { name: "모니터링 아이템", value: items.length > 0 ? `${items.length}개 등록됨` : "아직 등록된 아이템이 없습니다.", inline: true },
-      { name: "알림 채널", value: alertChannelId ? `<#${alertChannelId}>` : "미설정", inline: true },
+      { name: "내 모니터링 아이템", value: items.length > 0 ? `${items.length}개 등록됨` : "아직 등록된 아이템이 없습니다.", inline: true },
+      { name: "내 알림 채널", value: alertChannelId ? `<#${alertChannelId}>` : "미설정", inline: true },
+      { name: "내 알림 기준", value: `${alertDiscountPercent}% 이상 낮을 때`, inline: true },
       { name: "체크 간격", value: `${checkIntervalSeconds}초`, inline: true },
       { name: "API 키", value: mabinogiClient.hasApiKey() ? "설정됨" : "미설정", inline: true },
     );
@@ -95,6 +113,7 @@ function buildMainPanel(context) {
 
   const secondRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(CUSTOM_ID.alertChannelButton).setLabel("이 채널로 알림").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(CUSTOM_ID.thresholdButton).setLabel("알림 기준").setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(CUSTOM_ID.intervalButton).setLabel("체크 간격").setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(CUSTOM_ID.statusButton).setLabel("상태").setStyle(ButtonStyle.Secondary),
   );
@@ -103,7 +122,7 @@ function buildMainPanel(context) {
 }
 
 function buildListPanel(context, page = 0, notice = "") {
-  const items = context.itemStore.getAll();
+  const items = context.itemStore.getAll(context.userId);
   const totalPages = Math.max(1, Math.ceil(items.length / ITEMS_PER_PAGE));
   const currentPage = clampPage(page, totalPages);
   const start = currentPage * ITEMS_PER_PAGE;
@@ -115,7 +134,7 @@ function buildListPanel(context, page = 0, notice = "") {
       : "등록된 아이템이 없습니다.";
 
   const embed = new EmbedBuilder()
-    .setTitle("모니터링 목록")
+    .setTitle("내 모니터링 목록")
     .setDescription(description)
     .setColor(0x4c6ef5)
     .setFooter({ text: `${items.length}개 등록됨 · ${currentPage + 1}/${totalPages} 페이지` });
@@ -179,8 +198,43 @@ function buildItemModal({ customId, title, label, placeholder }) {
     .addComponents(new ActionRowBuilder().addComponents(input));
 }
 
-function buildMarketEmbed(marketData, threshold) {
-  const isAlert = marketData.lowestPrice <= marketData.nextPrice * threshold;
+function buildIntervalModal(currentIntervalSeconds) {
+  const input = new TextInputBuilder()
+    .setCustomId(INTERVAL_INPUT_ID)
+    .setLabel("체크 간격(초)")
+    .setPlaceholder("예: 10")
+    .setValue(String(currentIntervalSeconds))
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setMinLength(1)
+    .setMaxLength(4);
+
+  return new ModalBuilder()
+    .setCustomId(CUSTOM_ID.intervalModal)
+    .setTitle("체크 간격 설정")
+    .addComponents(new ActionRowBuilder().addComponents(input));
+}
+
+function buildThresholdModal(currentAlertDiscountPercent) {
+  const input = new TextInputBuilder()
+    .setCustomId(ALERT_DISCOUNT_INPUT_ID)
+    .setLabel("알림 기준 할인율(10~100)")
+    .setPlaceholder("예: 10")
+    .setValue(String(currentAlertDiscountPercent))
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true)
+    .setMinLength(2)
+    .setMaxLength(3);
+
+  return new ModalBuilder()
+    .setCustomId(CUSTOM_ID.thresholdModal)
+    .setTitle("내 알림 기준 설정")
+    .addComponents(new ActionRowBuilder().addComponents(input));
+}
+
+function buildMarketEmbed(marketData, alertDiscountPercent) {
+  const alertDiscountRate = alertDiscountPercent / 100;
+  const isAlert = marketData.discountRate >= alertDiscountRate;
   const title =
     marketData.resolvedItemName && marketData.resolvedItemName !== marketData.itemName
       ? `경매장 가격 확인: ${marketData.itemName} → ${marketData.resolvedItemName}`
@@ -191,44 +245,45 @@ function buildMarketEmbed(marketData, threshold) {
     .setColor(isAlert ? 0xe03131 : 0x2f9e44)
     .addFields(
       { name: "최저 등록가", value: formatGold(marketData.lowestPrice), inline: true },
-      { name: "차순위 가격", value: formatGold(marketData.nextPrice), inline: true },
+      { name: "기준가(차순위)", value: formatGold(marketData.nextPrice), inline: true },
       { name: "할인율", value: formatPercent(marketData.discountRate), inline: true },
-      { name: "알림 기준", value: `최저가가 차순위의 ${formatPercent(threshold)} 이하`, inline: false },
+      { name: "내 알림 기준", value: `기준가 대비 ${alertDiscountPercent}% 이상 낮음`, inline: false },
     )
     .setFooter({ text: `검색 결과 ${marketData.matchingCount}개 중 최저 2개 기준` })
     .setTimestamp(new Date());
 }
 
 function buildStatusText(context) {
-  const { config, itemStore, settingsStore, mabinogiClient, monitor } = context;
+  const { itemStore, settingsStore, mabinogiClient, monitor, userId } = context;
   const status = monitor.getStatus();
-  const alertChannelId = settingsStore.getAlertChannelId();
+  const alertChannelId = settingsStore.getAlertChannelId(userId);
+  const alertDiscountPercent = getAlertDiscountPercent(context);
 
   return [
     `상태: ${status.running ? "실행 중" : "중지됨"}`,
-    `아이템 수: ${itemStore.getAll().length}`,
-    `알림 채널: ${alertChannelId ? `<#${alertChannelId}>` : "미설정"}`,
+    `내 아이템: ${itemStore.getAll(userId).length}`,
+    `내 알림 채널: ${alertChannelId ? `<#${alertChannelId}>` : "미설정"}`,
     `마비노기 API 키: ${mabinogiClient.hasApiKey() ? "설정됨" : "미설정"}`,
     `체크 간격: ${Math.round(monitor.intervalMs / 1000)}초`,
-    `알림 기준: 차순위 가격의 ${formatPercent(config.alertDiscountThreshold)} 이하`,
+    `내 알림 기준: 기준가 대비 ${alertDiscountPercent}% 이상 낮을 때`,
     `마지막 체크: ${formatDateTime(status.lastRunAt)}`,
     `다음 체크: ${formatDateTime(status.nextRunAt)}`,
     `마지막 오류: ${status.lastError ?? "없음"}`,
   ].join("\n");
 }
 
-async function setCurrentChannelAsAlert(interaction, settingsStore) {
+async function setCurrentChannelAsAlert(interaction, settingsStore, userId) {
   if (!interaction.channel?.isTextBased()) {
     await interaction.reply(privateReply("텍스트를 보낼 수 있는 채널에서만 알림 채널을 설정할 수 있습니다."));
     return;
   }
 
-  await settingsStore.setAlertChannelId(interaction.channelId);
-  await interaction.reply(privateReply(`알림 채널을 설정했습니다: <#${interaction.channelId}>`));
+  await settingsStore.setAlertChannelId(userId, interaction.channelId);
+  await interaction.reply(privateReply(`내 알림 채널을 설정했습니다: <#${interaction.channelId}>`));
 }
 
 async function addMonitoringItem(interaction, context, rawItemName) {
-  const { itemStore, mabinogiClient, monitor } = context;
+  const { itemStore, mabinogiClient, monitor, userId } = context;
   const normalizedInput = normalizeItemName(rawItemName);
 
   if (!normalizedInput) {
@@ -237,17 +292,17 @@ async function addMonitoringItem(interaction, context, rawItemName) {
   }
 
   const resolvedItemName = await mabinogiClient.resolveItemName(normalizedInput);
-  const result = await itemStore.add(resolvedItemName);
+  const result = await itemStore.add(userId, resolvedItemName);
 
   if (!result.added) {
-    const suffix = result.updatedExisting ? "\n기존 항목 표기를 더 정확한 이름으로 정리했습니다." : "";
-    await interaction.editReply(`이미 모니터링 중입니다: ${result.existingItem ?? resolvedItemName}${suffix}`);
+    const suffix = result.updatedExisting ? "\n기존 목록 표기를 더 정확한 이름으로 정리했습니다." : "";
+    await interaction.editReply(`이미 내 모니터링 목록에 있습니다: ${result.existingItem ?? resolvedItemName}${suffix}`);
     return;
   }
 
-  monitor.clearCooldown(resolvedItemName);
+  monitor.clearCooldown(userId, resolvedItemName);
   const resolvedNote = resolvedItemName !== normalizedInput ? `\n입력값: ${normalizedInput}\n매칭명: ${resolvedItemName}` : "";
-  await interaction.editReply(`추가 완료: ${resolvedItemName}${resolvedNote}\n\n현재 목록:\n${formatItemList(result.items)}`);
+  await interaction.editReply(`추가 완료: ${resolvedItemName}${resolvedNote}\n\n내 현재 목록:\n${formatItemList(result.items)}`);
 }
 
 async function handleChatInputCommand(interaction, context) {
@@ -259,7 +314,7 @@ async function handleChatInputCommand(interaction, context) {
 }
 
 async function handleButton(interaction, context) {
-  const { itemStore, settingsStore } = context;
+  const { itemStore, settingsStore, userId } = context;
 
   if (interaction.customId === CUSTOM_ID.addButton) {
     await interaction.showModal(
@@ -298,16 +353,16 @@ async function handleButton(interaction, context) {
 
   if (interaction.customId.startsWith(`${CUSTOM_ID.listDeletePrefix}:`)) {
     const { page, index } = parseListDeleteCustomId(interaction.customId);
-    const itemName = itemStore.getAll()[index];
+    const itemName = itemStore.getAll(userId)[index];
 
     if (!itemName) {
       await interaction.update(buildListPanel(context, page, "삭제할 항목을 찾지 못했습니다. 목록을 다시 열어 주세요."));
       return;
     }
 
-    const result = await itemStore.removeMany([itemName]);
+    const result = await itemStore.removeMany(userId, [itemName]);
     for (const removedItem of result.removedItems) {
-      context.monitor.clearCooldown(removedItem);
+      context.monitor.clearCooldown(userId, removedItem);
     }
 
     const totalPages = Math.max(1, Math.ceil(result.items.length / ITEMS_PER_PAGE));
@@ -323,27 +378,17 @@ async function handleButton(interaction, context) {
   }
 
   if (interaction.customId === CUSTOM_ID.alertChannelButton) {
-    await setCurrentChannelAsAlert(interaction, settingsStore);
+    await setCurrentChannelAsAlert(interaction, settingsStore, userId);
+    return;
+  }
+
+  if (interaction.customId === CUSTOM_ID.thresholdButton) {
+    await interaction.showModal(buildThresholdModal(getAlertDiscountPercent(context)));
     return;
   }
 
   if (interaction.customId === CUSTOM_ID.intervalButton) {
-    const input = new TextInputBuilder()
-      .setCustomId(INTERVAL_INPUT_ID)
-      .setLabel("체크 간격(초)")
-      .setPlaceholder("예: 10")
-      .setValue(String(Math.round(context.monitor.intervalMs / 1000)))
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true)
-      .setMinLength(1)
-      .setMaxLength(4);
-
-    await interaction.showModal(
-      new ModalBuilder()
-        .setCustomId(CUSTOM_ID.intervalModal)
-        .setTitle("체크 간격 설정")
-        .addComponents(new ActionRowBuilder().addComponents(input)),
-    );
+    await interaction.showModal(buildIntervalModal(Math.round(context.monitor.intervalMs / 1000)));
     return;
   }
 
@@ -360,7 +405,7 @@ async function handleButton(interaction, context) {
 }
 
 async function handleModalSubmit(interaction, context) {
-  const { itemStore, settingsStore, mabinogiClient, monitor, config } = context;
+  const { itemStore, settingsStore, mabinogiClient, monitor, userId } = context;
 
   if (interaction.customId === CUSTOM_ID.intervalModal) {
     const rawSeconds = interaction.fields.getTextInputValue(INTERVAL_INPUT_ID).trim();
@@ -380,6 +425,28 @@ async function handleModalSubmit(interaction, context) {
     return;
   }
 
+  if (interaction.customId === CUSTOM_ID.thresholdModal) {
+    const rawPercent = interaction.fields.getTextInputValue(ALERT_DISCOUNT_INPUT_ID).trim();
+    const alertDiscountPercent = Number(rawPercent);
+
+    if (
+      !Number.isInteger(alertDiscountPercent) ||
+      alertDiscountPercent < MIN_ALERT_DISCOUNT_PERCENT ||
+      alertDiscountPercent > MAX_ALERT_DISCOUNT_PERCENT
+    ) {
+      await interaction.reply(
+        privateReply(
+          `알림 기준은 ${MIN_ALERT_DISCOUNT_PERCENT}부터 ${MAX_ALERT_DISCOUNT_PERCENT}까지의 정수로 입력해 주세요.`,
+        ),
+      );
+      return;
+    }
+
+    await settingsStore.setAlertDiscountPercent(userId, alertDiscountPercent);
+    await interaction.reply(privateReply(`내 알림 기준을 ${alertDiscountPercent}% 이상 낮을 때로 설정했습니다.`));
+    return;
+  }
+
   const itemName = normalizeItemName(interaction.fields.getTextInputValue(ITEM_INPUT_ID));
 
   if (interaction.customId === CUSTOM_ID.addModal) {
@@ -389,15 +456,15 @@ async function handleModalSubmit(interaction, context) {
   }
 
   if (interaction.customId === CUSTOM_ID.removeModal) {
-    const result = await itemStore.remove(itemName);
+    const result = await itemStore.remove(userId, itemName);
 
     if (!result.removed) {
-      await interaction.reply(privateReply(`목록에 없는 아이템입니다: ${itemName}`));
+      await interaction.reply(privateReply(`내 목록에 없는 아이템입니다: ${itemName}`));
       return;
     }
 
-    monitor.clearCooldown(itemName);
-    await interaction.reply(privateReply(`제거 완료: ${itemName}\n\n현재 목록:\n${formatItemList(result.items)}`));
+    monitor.clearCooldown(userId, itemName);
+    await interaction.reply(privateReply(`제거 완료: ${itemName}\n\n내 현재 목록:\n${formatItemList(result.items)}`));
     return;
   }
 
@@ -421,22 +488,29 @@ async function handleModalSubmit(interaction, context) {
       return;
     }
 
-    await interaction.editReply({ embeds: [buildMarketEmbed(marketData, config.alertDiscountThreshold)] });
+    await interaction.editReply({ embeds: [buildMarketEmbed(marketData, getAlertDiscountPercent(context))] });
   }
 }
 
 export async function handleInteraction(interaction, context) {
+  const userId = interaction.user?.id;
+  const scopedContext = { ...context, userId };
+
+  if (userId) {
+    await context.itemStore.ensureUser(userId);
+  }
+
   if (interaction.isChatInputCommand()) {
-    await handleChatInputCommand(interaction, context);
+    await handleChatInputCommand(interaction, scopedContext);
     return;
   }
 
   if (interaction.isButton()) {
-    await handleButton(interaction, context);
+    await handleButton(interaction, scopedContext);
     return;
   }
 
   if (interaction.isModalSubmit()) {
-    await handleModalSubmit(interaction, context);
+    await handleModalSubmit(interaction, scopedContext);
   }
 }

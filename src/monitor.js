@@ -1,6 +1,7 @@
 import { EmbedBuilder } from "discord.js";
 
 import { formatGold, formatPercent } from "./format.js";
+import { normalizeItemKey } from "./itemStore.js";
 
 function sleep(ms) {
   return new Promise((resolve) => {
@@ -8,13 +9,28 @@ function sleep(ms) {
   });
 }
 
+function toAlertDiscountPercent(value) {
+  const percent = Number(value);
+  return Number.isInteger(percent) && percent >= 10 && percent <= 100 ? percent : 10;
+}
+
 export class PriceMonitor {
-  constructor({ mabinogiClient, itemStore, resolveChannel, intervalMs, threshold, cooldownMs, logger }) {
+  constructor({
+    mabinogiClient,
+    itemStore,
+    settingsStore,
+    resolveChannel,
+    intervalMs,
+    defaultAlertDiscountPercent,
+    cooldownMs,
+    logger,
+  }) {
     this.mabinogiClient = mabinogiClient;
     this.itemStore = itemStore;
+    this.settingsStore = settingsStore;
     this.resolveChannel = resolveChannel;
     this.intervalMs = intervalMs;
-    this.threshold = threshold;
+    this.defaultAlertDiscountPercent = toAlertDiscountPercent(defaultAlertDiscountPercent);
     this.cooldownMs = cooldownMs;
     this.logger = logger;
     this.running = false;
@@ -55,8 +71,13 @@ export class PriceMonitor {
     };
   }
 
-  clearCooldown(itemName) {
-    this.lastAlertAtByItem.delete(itemName.toLocaleLowerCase("ko-KR"));
+  clearCooldown(userId, itemName) {
+    if (itemName === undefined) {
+      itemName = userId;
+      userId = "global";
+    }
+
+    this.lastAlertAtByItem.delete(this.buildCooldownKey(userId, itemName));
   }
 
   setIntervalMs(intervalMs) {
@@ -109,8 +130,10 @@ export class PriceMonitor {
   }
 
   async checkAll() {
-    const items = this.itemStore.getAll();
-    if (items.length === 0) {
+    const users = this.itemStore.getUsers();
+    const itemCount = users.reduce((total, userData) => total + userData.items.length, 0);
+
+    if (itemCount === 0) {
       this.logger.info("No monitoring items registered.");
       return;
     }
@@ -120,14 +143,19 @@ export class PriceMonitor {
       return;
     }
 
-    this.logger.info(`Checking ${items.length} monitoring item(s).`);
-    for (const itemName of items) {
-      await this.checkItem(itemName);
-      await sleep(250);
+    this.logger.info(`Checking ${itemCount} monitoring item(s) for ${users.length} user(s).`);
+    for (const userData of users) {
+      for (const itemName of userData.items) {
+        await this.checkItem(userData.userId, itemName);
+        await sleep(250);
+      }
     }
   }
 
-  async checkItem(itemName) {
+  async checkItem(userId, itemName) {
+    const alertDiscountPercent = this.settingsStore.getAlertDiscountPercent(userId, this.defaultAlertDiscountPercent);
+    const alertDiscountRate = alertDiscountPercent / 100;
+
     try {
       const marketData = await this.mabinogiClient.fetchMarketData(itemName);
       if (!marketData.found) {
@@ -140,13 +168,13 @@ export class PriceMonitor {
       this.logger.info(
         `${itemName} -> ${marketData.resolvedItemName}: lowest=${marketData.lowestPrice.toLocaleString("ko-KR")}, next=${marketData.nextPrice.toLocaleString(
           "ko-KR",
-        )}, discount=${formatPercent(marketData.discountRate)}`,
+        )}, discount=${formatPercent(marketData.discountRate)}, user=${userId}, threshold=${alertDiscountPercent}%`,
       );
 
-      if (marketData.lowestPrice <= marketData.nextPrice * this.threshold) {
-        await this.sendAlertIfAllowed(marketData);
+      if (marketData.discountRate >= alertDiscountRate) {
+        await this.sendAlertIfAllowed(userId, marketData, alertDiscountPercent);
       } else {
-        this.clearCooldown(itemName);
+        this.clearCooldown(userId, itemName);
       }
 
       return marketData;
@@ -156,48 +184,53 @@ export class PriceMonitor {
     }
   }
 
-  async sendAlertIfAllowed(marketData) {
-    const key = marketData.itemName.toLocaleLowerCase("ko-KR");
+  async sendAlertIfAllowed(userId, marketData, alertDiscountPercent) {
+    const key = this.buildCooldownKey(userId, marketData.itemName);
     const now = Date.now();
     const lastAlertAt = this.lastAlertAtByItem.get(key) ?? 0;
 
     if (this.cooldownMs > 0 && now - lastAlertAt < this.cooldownMs) {
-      this.logger.info(`${marketData.itemName}: alert skipped by cooldown.`);
+      this.logger.info(`${marketData.itemName}: alert skipped by cooldown. user=${userId}`);
       return;
     }
 
     let channel = null;
     try {
-      channel = await this.resolveChannel();
+      channel = await this.resolveChannel(userId);
     } catch (error) {
-      this.logger.warn(`Alert skipped: failed to resolve alert channel. ${error.message}`);
+      this.logger.warn(`Alert skipped: failed to resolve alert channel. user=${userId}. ${error.message}`);
       return;
     }
 
     if (!channel) {
-      this.logger.warn("Alert skipped: no alert channel configured. Use /구마 in Discord and press the alert-channel button.");
+      this.logger.warn(`Alert skipped: no alert channel configured for user=${userId}. Use /구마 and press the alert-channel button.`);
       return;
     }
 
     if (!channel?.isTextBased()) {
-      this.logger.warn("Alert skipped: configured Discord alert channel is not text-based.");
+      this.logger.warn(`Alert skipped: configured Discord alert channel is not text-based. user=${userId}`);
       return;
     }
 
     const embed = new EmbedBuilder()
-      .setTitle(`특가 알림: ${marketData.resolvedItemName}`)
+      .setTitle(`가격 알림: ${marketData.resolvedItemName}`)
       .setColor(0xe03131)
-      .setDescription(`최저 등록가가 차순위 가격의 ${formatPercent(this.threshold)} 이하입니다.`)
+      .setDescription(`기준가 대비 ${alertDiscountPercent}% 이상 낮은 매물을 찾았습니다.`)
       .addFields(
         { name: "최저 등록가", value: formatGold(marketData.lowestPrice), inline: true },
-        { name: "차순위 가격", value: formatGold(marketData.nextPrice), inline: true },
+        { name: "기준가(차순위)", value: formatGold(marketData.nextPrice), inline: true },
         { name: "할인율", value: formatPercent(marketData.discountRate), inline: true },
+        { name: "내 알림 기준", value: `${alertDiscountPercent}% 이상 낮을 때`, inline: false },
       )
-      .setFooter({ text: `Nexon Open API 경매장 키워드 검색 기준` })
+      .setFooter({ text: "Nexon Open API 경매장 데이터 기준" })
       .setTimestamp(new Date());
 
-    await channel.send({ content: `특가 후보를 찾았습니다: **${marketData.resolvedItemName}**`, embeds: [embed] });
+    await channel.send({ content: `<@${userId}> 구마가 매물을 찾았습니다: **${marketData.resolvedItemName}**`, embeds: [embed] });
     this.lastAlertAtByItem.set(key, now);
-    this.logger.info(`${marketData.itemName}: alert sent.`);
+    this.logger.info(`${marketData.itemName}: alert sent. user=${userId}`);
+  }
+
+  buildCooldownKey(userId, itemName) {
+    return `${userId ?? "global"}:${normalizeItemKey(itemName)}`;
   }
 }

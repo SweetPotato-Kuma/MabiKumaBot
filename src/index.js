@@ -26,8 +26,8 @@ async function main() {
     timeoutMs: config.requestTimeoutMs,
   });
 
-  const resolveAlertChannel = async () => {
-    const alertChannelId = settingsStore.getAlertChannelId();
+  const resolveAlertChannel = async (userId) => {
+    const alertChannelId = settingsStore.getAlertChannelId(userId);
     if (!alertChannelId) {
       return null;
     }
@@ -39,9 +39,10 @@ async function main() {
   const monitor = new PriceMonitor({
     mabinogiClient,
     itemStore,
+    settingsStore,
     resolveChannel: resolveAlertChannel,
     intervalMs: settingsStore.getCheckIntervalMs(config.checkIntervalMs),
-    threshold: config.alertDiscountThreshold,
+    defaultAlertDiscountPercent: Math.round(config.alertDiscountThreshold * 100),
     cooldownMs: config.alertCooldownMs,
     logger,
   });
