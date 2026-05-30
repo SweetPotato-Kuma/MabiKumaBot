@@ -47,14 +47,6 @@ function readDiscordToken() {
   return token;
 }
 
-function readMabinogiApiKey() {
-  const apiKey = readString("MABINOGI_API_KEY") || readString("API_KEY");
-  if (!apiKey) {
-    throw new ConfigError("API_KEY 또는 MABINOGI_API_KEY 환경 변수가 필요합니다.");
-  }
-  return apiKey;
-}
-
 function parseCsv(raw) {
   return raw
     .split(",")
@@ -80,7 +72,7 @@ export function getConfig({ requireClientId = false } = {}) {
     discordClientId: clientId,
     discordGuildId: readString("DISCORD_GUILD_ID"),
     discordChannelId: readString("DISCORD_CHANNEL_ID"),
-    mabinogiApiKey: readMabinogiApiKey(),
+    mabinogiApiKey: readString("MABINOGI_API_KEY") || readString("API_KEY"),
     initialItems: parseCsv(readString("MABINOGI_ITEMS")),
     checkIntervalMs: readNumber("CHECK_INTERVAL_SECONDS", 60, { min: 1 }) * 1000,
     requestTimeoutMs: readNumber("REQUEST_TIMEOUT_SECONDS", 10, { min: 1 }) * 1000,

@@ -104,6 +104,7 @@ export async function handleInteraction(interaction, context) {
           `상태: ${status.running ? "실행 중" : "중지됨"}`,
           `아이템 수: ${itemStore.getAll().length}`,
           `알림 채널: ${alertChannelId ? `<#${alertChannelId}>` : "미설정"}`,
+          `마비노기 API 키: ${mabinogiClient.hasApiKey() ? "설정됨" : "미설정"}`,
           `체크 간격: ${Math.round(config.checkIntervalMs / 1000)}초`,
           `알림 기준: 차순위 가격의 ${formatPercent(config.alertDiscountThreshold)} 이하`,
           `마지막 체크: ${formatDateTime(status.lastRunAt)}`,
@@ -145,6 +146,11 @@ export async function handleInteraction(interaction, context) {
   if (commandName === "가격확인") {
     const itemName = normalizeItemName(interaction.options.getString(ITEM_OPTION_NAME, true));
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    if (!mabinogiClient.hasApiKey()) {
+      await interaction.editReply("마비노기 가격 조회를 하려면 `.env`에 `API_KEY` 또는 `MABINOGI_API_KEY`를 추가해야 합니다.");
+      return;
+    }
 
     const marketData = await mabinogiClient.fetchMarketData(itemName);
     if (!marketData.found) {

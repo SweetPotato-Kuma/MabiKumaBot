@@ -19,7 +19,15 @@ export class MabinogiClient {
     this.timeoutMs = timeoutMs;
   }
 
+  hasApiKey() {
+    return Boolean(this.apiKey);
+  }
+
   async fetchMarketData(itemName) {
+    if (!this.hasApiKey()) {
+      throw new MabinogiApiError("API_KEY 또는 MABINOGI_API_KEY가 설정되지 않았습니다.");
+    }
+
     const url = new URL(this.endpoint);
     url.searchParams.set("keyword", itemName);
 
@@ -87,4 +95,3 @@ export class MabinogiClient {
     };
   }
 }
-

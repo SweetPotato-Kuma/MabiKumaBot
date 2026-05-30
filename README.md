@@ -36,9 +36,12 @@ npm install
 cp .env.example .env
 ```
 
-필수 값:
+봇 실행 필수 값:
 
 - `TOKEN`: Discord 봇 토큰
+
+가격 조회 필수 값:
+
 - `API_KEY`: Nexon Open API 키
 
 선택 값:

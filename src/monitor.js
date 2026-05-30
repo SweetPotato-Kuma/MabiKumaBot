@@ -102,6 +102,11 @@ export class PriceMonitor {
       return;
     }
 
+    if (!this.mabinogiClient.hasApiKey()) {
+      this.logger.warn("Price check skipped: API_KEY or MABINOGI_API_KEY is not configured.");
+      return;
+    }
+
     this.logger.info(`Checking ${items.length} monitoring item(s).`);
     for (const itemName of items) {
       await this.checkItem(itemName);
