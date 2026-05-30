@@ -13,9 +13,8 @@ import {
 import { formatDateTime, formatGold, formatItemList, formatPercent } from "./format.js";
 import { normalizeItemName } from "./itemStore.js";
 
+const ITEMS_PER_PAGE = 4;
 const ITEM_INPUT_ID = "itemName";
-const DELETE_ITEM_INPUT_ID = "deleteItem";
-const LIST_DISPLAY_INPUT_ID = "itemListDisplay";
 const STATUS_DISPLAY_INPUT_ID = "statusDisplay";
 const USE_CURRENT_CHANNEL_INPUT_ID = "useCurrentChannel";
 const INTERVAL_INPUT_ID = "intervalSeconds";
@@ -36,10 +35,9 @@ const CUSTOM_ID = {
   thresholdButton: "guma:threshold",
   priceButton: "guma:price",
   listPagePrefix: "guma:list-page",
+  listLabelPrefix: "guma:list-label",
   listDeletePrefix: "guma:list-delete",
   addModal: "guma:add-modal",
-  listModal: "guma:list-modal",
-  removeModal: "guma:remove-modal",
   settingsModal: "guma:settings-modal",
   intervalModal: "guma:interval-modal",
   thresholdModal: "guma:threshold-modal",
@@ -67,16 +65,33 @@ function privateReply(payload) {
   return { ...payload, flags: MessageFlags.Ephemeral };
 }
 
+function clampPage(page, totalPages) {
+  return Math.max(0, Math.min(page, Math.max(0, totalPages - 1)));
+}
+
+function truncateButtonLabel(text, maxLength = 80) {
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+}
+
+function parsePageFromCustomId(customId, prefix) {
+  const page = Number(customId.slice(prefix.length + 1));
+  return Number.isInteger(page) && page >= 0 ? page : 0;
+}
+
+function parseListDeleteCustomId(customId) {
+  const [, , page, index] = customId.split(":");
+  return {
+    page: Number.isInteger(Number(page)) ? Number(page) : 0,
+    index: Number.isInteger(Number(index)) ? Number(index) : -1,
+  };
+}
+
 function truncateText(text, maxLength = 3900) {
   if (text.length <= maxLength) {
     return text;
   }
 
   return `${text.slice(0, maxLength - 40)}\n...생략됨`;
-}
-
-function formatItemListForDisplay(items) {
-  return truncateText(formatItemList(items));
 }
 
 function formatItemListForReply(items) {
@@ -141,29 +156,61 @@ function buildItemModal({ customId, title, label, placeholder }) {
     .addComponents(new ActionRowBuilder().addComponents(input));
 }
 
-function buildListModal(context) {
+function buildListPanel(context, page = 0, notice = "") {
   const items = context.itemStore.getAll(context.userId);
+  const totalPages = Math.max(1, Math.ceil(items.length / ITEMS_PER_PAGE));
+  const currentPage = clampPage(page, totalPages);
+  const start = currentPage * ITEMS_PER_PAGE;
+  const visibleItems = items.slice(start, start + ITEMS_PER_PAGE);
 
-  const listDisplay = new TextInputBuilder()
-    .setCustomId(LIST_DISPLAY_INPUT_ID)
-    .setLabel("내 목록(보기용)")
-    .setValue(formatItemListForDisplay(items))
-    .setStyle(TextInputStyle.Paragraph)
-    .setRequired(false)
-    .setMaxLength(4000);
+  const description =
+    visibleItems.length > 0
+      ? "삭제할 항목의 오른쪽 삭제 버튼을 눌러 주세요."
+      : "등록된 아이템이 없습니다.";
 
-  const deleteInput = new TextInputBuilder()
-    .setCustomId(DELETE_ITEM_INPUT_ID)
-    .setLabel("삭제할 번호 또는 아이템명")
-    .setPlaceholder("예: 1 또는 마나 허브")
-    .setStyle(TextInputStyle.Short)
-    .setRequired(false)
-    .setMaxLength(100);
-
-  return new ModalBuilder()
-    .setCustomId(CUSTOM_ID.listModal)
+  const embed = new EmbedBuilder()
     .setTitle("내 목록/삭제")
-    .addComponents(new ActionRowBuilder().addComponents(listDisplay), new ActionRowBuilder().addComponents(deleteInput));
+    .setDescription(description)
+    .setColor(0x4c6ef5)
+    .setFooter({ text: `${items.length}개 등록됨 · ${currentPage + 1}/${totalPages} 페이지` });
+
+  if (notice) {
+    embed.addFields({ name: "처리 결과", value: notice });
+  }
+
+  const components = visibleItems.map((item, index) => {
+    const absoluteIndex = start + index;
+    return new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`${CUSTOM_ID.listLabelPrefix}:${currentPage}:${absoluteIndex}`)
+        .setLabel(truncateButtonLabel(`${absoluteIndex + 1}. ${item}`, 70))
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(true),
+      new ButtonBuilder()
+        .setCustomId(`${CUSTOM_ID.listDeletePrefix}:${currentPage}:${absoluteIndex}`)
+        .setLabel("삭제")
+        .setStyle(ButtonStyle.Danger),
+    );
+  });
+
+  if (totalPages > 1) {
+    components.push(
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`${CUSTOM_ID.listPagePrefix}:${currentPage - 1}`)
+          .setLabel("이전")
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(currentPage === 0),
+        new ButtonBuilder()
+          .setCustomId(`${CUSTOM_ID.listPagePrefix}:${currentPage + 1}`)
+          .setLabel("다음")
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(currentPage >= totalPages - 1),
+      ),
+    );
+  }
+
+  return { embeds: [embed], components };
 }
 
 function buildSettingsModal(context) {
@@ -258,28 +305,6 @@ function buildStatusText(context) {
   ].join("\n");
 }
 
-function parseDeletionTargets(rawInput, items) {
-  const tokens = rawInput
-    .split(/[\n,;]+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-  const targets = [];
-  const seen = new Set();
-
-  for (const token of tokens) {
-    const itemIndex = Number(token);
-    const target = Number.isInteger(itemIndex) && itemIndex >= 1 && itemIndex <= items.length ? items[itemIndex - 1] : token;
-    const normalizedTarget = normalizeItemName(target);
-
-    if (normalizedTarget && !seen.has(normalizedTarget)) {
-      seen.add(normalizedTarget);
-      targets.push(normalizedTarget);
-    }
-  }
-
-  return targets;
-}
-
 async function addMonitoringItem(interaction, context, rawItemName) {
   const { itemStore, mabinogiClient, monitor, userId } = context;
   const normalizedInput = normalizeItemName(rawItemName);
@@ -325,7 +350,7 @@ async function handleButton(interaction, context) {
   }
 
   if (interaction.customId === CUSTOM_ID.listButton || interaction.customId === CUSTOM_ID.removeButton) {
-    await interaction.showModal(buildListModal(context));
+    await interaction.reply(privateReply(buildListPanel(context)));
     return;
   }
 
@@ -334,11 +359,30 @@ async function handleButton(interaction, context) {
     return;
   }
 
-  if (
-    interaction.customId.startsWith(`${CUSTOM_ID.listPagePrefix}:`) ||
-    interaction.customId.startsWith(`${CUSTOM_ID.listDeletePrefix}:`)
-  ) {
-    await interaction.reply(privateReply("목록/삭제 버튼을 다시 눌러 모달에서 처리해 주세요."));
+  if (interaction.customId.startsWith(`${CUSTOM_ID.listPagePrefix}:`)) {
+    const page = parsePageFromCustomId(interaction.customId, CUSTOM_ID.listPagePrefix);
+    await interaction.update(buildListPanel(context, page));
+    return;
+  }
+
+  if (interaction.customId.startsWith(`${CUSTOM_ID.listDeletePrefix}:`)) {
+    const { page, index } = parseListDeleteCustomId(interaction.customId);
+    const itemName = context.itemStore.getAll(context.userId)[index];
+
+    if (!itemName) {
+      await interaction.update(buildListPanel(context, page, "삭제할 항목을 찾지 못했습니다. 목록을 다시 열어 주세요."));
+      return;
+    }
+
+    const result = await context.itemStore.removeMany(context.userId, [itemName]);
+    for (const removedItem of result.removedItems) {
+      context.monitor.clearCooldown(context.userId, removedItem);
+    }
+
+    const totalPages = Math.max(1, Math.ceil(result.items.length / ITEMS_PER_PAGE));
+    const nextPage = clampPage(page, totalPages);
+    const notice = result.removed ? `삭제 완료: ${result.removedItems.join(", ")}` : "삭제할 항목을 찾지 못했습니다.";
+    await interaction.update(buildListPanel(context, nextPage, notice));
     return;
   }
 
@@ -409,35 +453,10 @@ async function handleSettingsModalSubmit(interaction, context) {
 }
 
 async function handleModalSubmit(interaction, context) {
-  const { itemStore, mabinogiClient, monitor, userId } = context;
+  const { mabinogiClient } = context;
 
   if (interaction.customId === CUSTOM_ID.settingsModal) {
     await handleSettingsModalSubmit(interaction, context);
-    return;
-  }
-
-  if (interaction.customId === CUSTOM_ID.listModal || interaction.customId === CUSTOM_ID.removeModal) {
-    const items = itemStore.getAll(userId);
-    const deleteInput = normalizeItemName(interaction.fields.getTextInputValue(DELETE_ITEM_INPUT_ID));
-
-    if (!deleteInput) {
-      await interaction.reply(privateReply(`내 현재 목록:\n${formatItemListForReply(items)}`));
-      return;
-    }
-
-    const targets = parseDeletionTargets(deleteInput, items);
-    const result = await itemStore.removeMany(userId, targets);
-
-    if (!result.removed) {
-      await interaction.reply(privateReply(`삭제할 항목을 찾지 못했습니다: ${deleteInput}\n\n내 현재 목록:\n${formatItemListForReply(items)}`));
-      return;
-    }
-
-    for (const removedItem of result.removedItems) {
-      monitor.clearCooldown(userId, removedItem);
-    }
-
-    await interaction.reply(privateReply(`삭제 완료: ${result.removedItems.join(", ")}\n\n내 현재 목록:\n${formatItemListForReply(result.items)}`));
     return;
   }
 
