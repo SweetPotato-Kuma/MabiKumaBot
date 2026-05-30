@@ -108,6 +108,19 @@ export class MabinogiClient {
     return Boolean(this.apiKey);
   }
 
+  async resolveItemName(itemName) {
+    if (!this.hasApiKey()) {
+      return itemName;
+    }
+
+    try {
+      const marketData = await this.fetchMarketData(itemName);
+      return marketData.resolvedItemName || itemName;
+    } catch {
+      return itemName;
+    }
+  }
+
   async fetchAuctionItems(keyword) {
     const url = new URL(this.endpoint);
     url.searchParams.set("keyword", keyword);

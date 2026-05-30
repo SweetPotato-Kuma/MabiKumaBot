@@ -175,7 +175,7 @@ export class PriceMonitor {
     }
 
     if (!channel) {
-      this.logger.warn("Alert skipped: no alert channel configured. Use /알림채널 설정 in Discord.");
+      this.logger.warn("Alert skipped: no alert channel configured. Use /구마 in Discord and press the alert-channel button.");
       return;
     }
 

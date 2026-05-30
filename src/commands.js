@@ -6,6 +6,7 @@ import {
   MessageFlags,
   ModalBuilder,
   SlashCommandBuilder,
+  StringSelectMenuBuilder,
   TextInputBuilder,
   TextInputStyle,
 } from "discord.js";
@@ -13,7 +14,7 @@ import {
 import { formatDateTime, formatGold, formatItemList, formatPercent } from "./format.js";
 import { normalizeItemName } from "./itemStore.js";
 
-const ITEM_OPTION_NAME = "아이템";
+const ITEMS_PER_PAGE = 25;
 const ITEM_INPUT_ID = "itemName";
 const INTERVAL_INPUT_ID = "intervalSeconds";
 const MIN_INTERVAL_SECONDS = 1;
@@ -26,35 +27,17 @@ const CUSTOM_ID = {
   statusButton: "kuma:status",
   alertChannelButton: "kuma:alert-channel",
   intervalButton: "kuma:interval",
+  priceButton: "kuma:price",
+  listPagePrefix: "kuma:list-page",
+  listDeletePrefix: "kuma:list-delete",
   addModal: "kuma:add-modal",
   removeModal: "kuma:remove-modal",
   intervalModal: "kuma:interval-modal",
+  priceModal: "kuma:price-modal",
 };
 
 export const commandBuilders = [
-  new SlashCommandBuilder()
-    .setName("구마")
-    .setDescription("버튼 UI로 모니터링 아이템, 알림 채널, 체크 간격을 관리합니다."),
-  new SlashCommandBuilder()
-    .setName("추가")
-    .setDescription("마비노기 경매장 모니터링 아이템을 추가합니다.")
-    .addStringOption((option) => option.setName(ITEM_OPTION_NAME).setDescription("추가할 아이템 이름").setRequired(true)),
-  new SlashCommandBuilder()
-    .setName("제거")
-    .setDescription("마비노기 경매장 모니터링 아이템을 제거합니다.")
-    .addStringOption((option) => option.setName(ITEM_OPTION_NAME).setDescription("제거할 아이템 이름").setRequired(true)),
-  new SlashCommandBuilder().setName("목록").setDescription("현재 모니터링 중인 아이템 목록을 봅니다."),
-  new SlashCommandBuilder().setName("상태").setDescription("봇과 모니터링 루프 상태를 확인합니다."),
-  new SlashCommandBuilder()
-    .setName("알림채널")
-    .setDescription("특가 알림을 보낼 Discord 채널을 설정하거나 확인합니다.")
-    .addSubcommand((subcommand) => subcommand.setName("설정").setDescription("현재 채널을 특가 알림 채널로 설정합니다."))
-    .addSubcommand((subcommand) => subcommand.setName("보기").setDescription("현재 특가 알림 채널을 확인합니다."))
-    .addSubcommand((subcommand) => subcommand.setName("해제").setDescription("특가 알림 채널 설정을 해제합니다.")),
-  new SlashCommandBuilder()
-    .setName("가격확인")
-    .setDescription("아이템의 현재 경매장 최저가와 차순위 가격을 확인합니다.")
-    .addStringOption((option) => option.setName(ITEM_OPTION_NAME).setDescription("확인할 아이템 이름").setRequired(true)),
+  new SlashCommandBuilder().setName("구마").setDescription("마비노기 경매장 모니터링을 관리합니다."),
 ];
 
 export const applicationCommands = commandBuilders.map((command) => command.toJSON());
@@ -67,7 +50,20 @@ function privateReply(payload) {
   return { ...payload, flags: MessageFlags.Ephemeral };
 }
 
-function buildRegistrationPanel(context) {
+function clampPage(page, totalPages) {
+  return Math.max(0, Math.min(page, Math.max(0, totalPages - 1)));
+}
+
+function truncateOptionText(text, maxLength = 100) {
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+}
+
+function parsePageFromCustomId(customId, prefix) {
+  const page = Number(customId.slice(prefix.length + 1));
+  return Number.isInteger(page) && page >= 0 ? page : 0;
+}
+
+function buildMainPanel(context) {
   const { itemStore, settingsStore, mabinogiClient } = context;
   const alertChannelId = settingsStore.getAlertChannelId();
   const items = itemStore.getAll();
@@ -86,8 +82,8 @@ function buildRegistrationPanel(context) {
 
   const firstRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(CUSTOM_ID.addButton).setLabel("아이템 추가").setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId(CUSTOM_ID.removeButton).setLabel("아이템 제거").setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId(CUSTOM_ID.listButton).setLabel("목록 보기").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(CUSTOM_ID.listButton).setLabel("목록/삭제").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(CUSTOM_ID.priceButton).setLabel("가격 확인").setStyle(ButtonStyle.Secondary),
   );
 
   const secondRow = new ActionRowBuilder().addComponents(
@@ -97,6 +93,69 @@ function buildRegistrationPanel(context) {
   );
 
   return { embeds: [embed], components: [firstRow, secondRow] };
+}
+
+function buildListPanel(context, page = 0, notice = "") {
+  const items = context.itemStore.getAll();
+  const totalPages = Math.max(1, Math.ceil(items.length / ITEMS_PER_PAGE));
+  const currentPage = clampPage(page, totalPages);
+  const start = currentPage * ITEMS_PER_PAGE;
+  const visibleItems = items.slice(start, start + ITEMS_PER_PAGE);
+
+  const description =
+    visibleItems.length > 0
+      ? visibleItems.map((item, index) => `${start + index + 1}. ${item}`).join("\n")
+      : "등록된 아이템이 없습니다.";
+
+  const embed = new EmbedBuilder()
+    .setTitle("모니터링 목록")
+    .setDescription(description)
+    .setColor(0x4c6ef5)
+    .setFooter({ text: `${items.length}개 등록됨 · ${currentPage + 1}/${totalPages} 페이지` });
+
+  if (notice) {
+    embed.addFields({ name: "처리 결과", value: notice });
+  }
+
+  const components = [];
+
+  if (visibleItems.length > 0) {
+    components.push(
+      new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(`${CUSTOM_ID.listDeletePrefix}:${currentPage}`)
+          .setPlaceholder("삭제할 아이템을 선택하세요.")
+          .setMinValues(1)
+          .setMaxValues(visibleItems.length)
+          .addOptions(
+            visibleItems.map((item, index) => ({
+              label: truncateOptionText(item),
+              value: String(start + index),
+              description: "선택하면 목록에서 삭제됩니다.",
+            })),
+          ),
+      ),
+    );
+  }
+
+  if (totalPages > 1) {
+    components.push(
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`${CUSTOM_ID.listPagePrefix}:${currentPage - 1}`)
+          .setLabel("이전")
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(currentPage === 0),
+        new ButtonBuilder()
+          .setCustomId(`${CUSTOM_ID.listPagePrefix}:${currentPage + 1}`)
+          .setLabel("다음")
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(currentPage >= totalPages - 1),
+      ),
+    );
+  }
+
+  return { embeds: [embed], components };
 }
 
 function buildItemModal({ customId, title, label, placeholder }) {
@@ -162,98 +221,35 @@ async function setCurrentChannelAsAlert(interaction, settingsStore) {
   await interaction.reply(privateReply(`알림 채널을 설정했습니다: <#${interaction.channelId}>`));
 }
 
+async function addMonitoringItem(interaction, context, rawItemName) {
+  const { itemStore, mabinogiClient, monitor } = context;
+  const normalizedInput = normalizeItemName(rawItemName);
+
+  if (!normalizedInput) {
+    await interaction.editReply("아이템 이름을 입력해 주세요.");
+    return;
+  }
+
+  const resolvedItemName = await mabinogiClient.resolveItemName(normalizedInput);
+  const result = await itemStore.add(resolvedItemName);
+
+  if (!result.added) {
+    const suffix = result.updatedExisting ? "\n기존 항목 표기를 더 정확한 이름으로 정리했습니다." : "";
+    await interaction.editReply(`이미 모니터링 중입니다: ${result.existingItem ?? resolvedItemName}${suffix}`);
+    return;
+  }
+
+  monitor.clearCooldown(resolvedItemName);
+  const resolvedNote = resolvedItemName !== normalizedInput ? `\n입력값: ${normalizedInput}\n매칭명: ${resolvedItemName}` : "";
+  await interaction.editReply(`추가 완료: ${resolvedItemName}${resolvedNote}\n\n현재 목록:\n${formatItemList(result.items)}`);
+}
+
 async function handleChatInputCommand(interaction, context) {
-  const { commandName } = interaction;
-  const { itemStore, settingsStore, mabinogiClient, monitor, config } = context;
-
-  if (commandName === "구마") {
-    await interaction.reply(privateReply(buildRegistrationPanel(context)));
+  if (interaction.commandName !== "구마") {
     return;
   }
 
-  if (commandName === "추가") {
-    const itemName = normalizeItemName(interaction.options.getString(ITEM_OPTION_NAME, true));
-    const result = await itemStore.add(itemName);
-
-    if (!result.added) {
-      const message = result.reason === "duplicate" ? `이미 모니터링 중입니다: ${itemName}` : "아이템 이름을 입력해 주세요.";
-      await interaction.reply(privateReply(message));
-      return;
-    }
-
-    monitor.clearCooldown(itemName);
-    await interaction.reply(privateReply(`추가 완료: ${itemName}\n\n현재 목록:\n${formatItemList(result.items)}`));
-    return;
-  }
-
-  if (commandName === "제거") {
-    const itemName = normalizeItemName(interaction.options.getString(ITEM_OPTION_NAME, true));
-    const result = await itemStore.remove(itemName);
-
-    if (!result.removed) {
-      await interaction.reply(privateReply(`목록에 없는 아이템입니다: ${itemName}`));
-      return;
-    }
-
-    monitor.clearCooldown(itemName);
-    await interaction.reply(privateReply(`제거 완료: ${itemName}\n\n현재 목록:\n${formatItemList(result.items)}`));
-    return;
-  }
-
-  if (commandName === "목록") {
-    await interaction.reply(privateReply(`현재 모니터링 중인 아이템:\n${formatItemList(itemStore.getAll())}`));
-    return;
-  }
-
-  if (commandName === "상태") {
-    await interaction.reply(privateReply(buildStatusText(context)));
-    return;
-  }
-
-  if (commandName === "알림채널") {
-    const subcommand = interaction.options.getSubcommand();
-
-    if (subcommand === "설정") {
-      await setCurrentChannelAsAlert(interaction, settingsStore);
-      return;
-    }
-
-    if (subcommand === "보기") {
-      const alertChannelId = settingsStore.getAlertChannelId();
-      await interaction.reply(privateReply(alertChannelId ? `현재 알림 채널: <#${alertChannelId}>` : "알림 채널이 아직 설정되지 않았습니다."));
-      return;
-    }
-
-    if (subcommand === "해제") {
-      await settingsStore.clearAlertChannelId();
-      await interaction.reply(privateReply("알림 채널 설정을 해제했습니다."));
-      return;
-    }
-  }
-
-  if (commandName === "가격확인") {
-    const itemName = normalizeItemName(interaction.options.getString(ITEM_OPTION_NAME, true));
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-    if (!mabinogiClient.hasApiKey()) {
-      await interaction.editReply("마비노기 가격 조회를 하려면 `.env`에 `API_KEY` 또는 `MABINOGI_API_KEY`를 추가해야 합니다.");
-      return;
-    }
-
-    const marketData = await mabinogiClient.fetchMarketData(itemName);
-    if (!marketData.found) {
-      await interaction.editReply(
-        [
-          `가격 정보를 충분히 찾지 못했습니다: ${itemName}`,
-          `검색 결과: ${marketData.rawCount}개, 이름 일치: ${marketData.matchingCount}개`,
-          `시도한 검색어: ${marketData.searchKeywords.join(", ")}`,
-        ].join("\n"),
-      );
-      return;
-    }
-
-    await interaction.editReply({ embeds: [buildMarketEmbed(marketData, config.alertDiscountThreshold)] });
-  }
+  await interaction.reply(privateReply(buildMainPanel(context)));
 }
 
 async function handleButton(interaction, context) {
@@ -284,7 +280,13 @@ async function handleButton(interaction, context) {
   }
 
   if (interaction.customId === CUSTOM_ID.listButton) {
-    await interaction.reply(privateReply(`현재 모니터링 중인 아이템:\n${formatItemList(itemStore.getAll())}`));
+    await interaction.reply(privateReply(buildListPanel(context)));
+    return;
+  }
+
+  if (interaction.customId.startsWith(`${CUSTOM_ID.listPagePrefix}:`)) {
+    const page = parsePageFromCustomId(interaction.customId, CUSTOM_ID.listPagePrefix);
+    await interaction.update(buildListPanel(context, page));
     return;
   }
 
@@ -315,11 +317,46 @@ async function handleButton(interaction, context) {
         .setTitle("체크 간격 설정")
         .addComponents(new ActionRowBuilder().addComponents(input)),
     );
+    return;
+  }
+
+  if (interaction.customId === CUSTOM_ID.priceButton) {
+    await interaction.showModal(
+      buildItemModal({
+        customId: CUSTOM_ID.priceModal,
+        title: "경매장 가격 확인",
+        label: "확인할 아이템 이름",
+        placeholder: "예: 마나허브",
+      }),
+    );
   }
 }
 
+async function handleSelectMenu(interaction, context) {
+  if (!interaction.customId.startsWith(`${CUSTOM_ID.listDeletePrefix}:`)) {
+    return;
+  }
+
+  const page = parsePageFromCustomId(interaction.customId, CUSTOM_ID.listDeletePrefix);
+  const items = context.itemStore.getAll();
+  const selectedItems = interaction.values.map((value) => items[Number(value)]).filter(Boolean);
+  const result = await context.itemStore.removeMany(selectedItems);
+
+  for (const itemName of result.removedItems) {
+    context.monitor.clearCooldown(itemName);
+  }
+
+  const totalPages = Math.max(1, Math.ceil(result.items.length / ITEMS_PER_PAGE));
+  const nextPage = clampPage(page, totalPages);
+  const notice = result.removed
+    ? `삭제 완료: ${result.removedItems.join(", ")}`
+    : "삭제할 항목을 찾지 못했습니다.";
+
+  await interaction.update(buildListPanel(context, nextPage, notice));
+}
+
 async function handleModalSubmit(interaction, context) {
-  const { itemStore, settingsStore, monitor } = context;
+  const { itemStore, settingsStore, mabinogiClient, monitor, config } = context;
 
   if (interaction.customId === CUSTOM_ID.intervalModal) {
     const rawSeconds = interaction.fields.getTextInputValue(INTERVAL_INPUT_ID).trim();
@@ -342,16 +379,8 @@ async function handleModalSubmit(interaction, context) {
   const itemName = normalizeItemName(interaction.fields.getTextInputValue(ITEM_INPUT_ID));
 
   if (interaction.customId === CUSTOM_ID.addModal) {
-    const result = await itemStore.add(itemName);
-
-    if (!result.added) {
-      const message = result.reason === "duplicate" ? `이미 모니터링 중입니다: ${itemName}` : "아이템 이름을 입력해 주세요.";
-      await interaction.reply(privateReply(message));
-      return;
-    }
-
-    monitor.clearCooldown(itemName);
-    await interaction.reply(privateReply(`추가 완료: ${itemName}\n\n현재 목록:\n${formatItemList(result.items)}`));
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    await addMonitoringItem(interaction, context, itemName);
     return;
   }
 
@@ -365,6 +394,30 @@ async function handleModalSubmit(interaction, context) {
 
     monitor.clearCooldown(itemName);
     await interaction.reply(privateReply(`제거 완료: ${itemName}\n\n현재 목록:\n${formatItemList(result.items)}`));
+    return;
+  }
+
+  if (interaction.customId === CUSTOM_ID.priceModal) {
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    if (!mabinogiClient.hasApiKey()) {
+      await interaction.editReply("마비노기 가격 조회를 하려면 `.env`에 `API_KEY` 또는 `MABINOGI_API_KEY`를 추가해야 합니다.");
+      return;
+    }
+
+    const marketData = await mabinogiClient.fetchMarketData(itemName);
+    if (!marketData.found) {
+      await interaction.editReply(
+        [
+          `가격 정보를 충분히 찾지 못했습니다: ${itemName}`,
+          `검색 결과: ${marketData.rawCount}개, 이름 일치: ${marketData.matchingCount}개`,
+          `시도한 검색어: ${marketData.searchKeywords.join(", ")}`,
+        ].join("\n"),
+      );
+      return;
+    }
+
+    await interaction.editReply({ embeds: [buildMarketEmbed(marketData, config.alertDiscountThreshold)] });
   }
 }
 
@@ -376,6 +429,11 @@ export async function handleInteraction(interaction, context) {
 
   if (interaction.isButton()) {
     await handleButton(interaction, context);
+    return;
+  }
+
+  if (interaction.isStringSelectMenu()) {
+    await handleSelectMenu(interaction, context);
     return;
   }
 

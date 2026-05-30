@@ -21,6 +21,8 @@ export async function registerCommandsWithClient(client, config, log) {
     const guild = await client.guilds.fetch(config.discordGuildId);
     await guild.commands.set(applicationCommands);
     log.info(`Discord slash commands registered (${applicationCommands.length} commands, ${scope}).`);
+    await client.application.commands.set([]);
+    log.info("Discord global slash commands cleared.");
     return;
   }
 
@@ -32,6 +34,8 @@ export async function registerCommandsWithClient(client, config, log) {
       await guild.commands.set(applicationCommands);
       log.info(`Discord slash commands registered (${applicationCommands.length} commands, guild ${guildId}).`);
     }
+    await client.application.commands.set([]);
+    log.info("Discord global slash commands cleared.");
   } else {
     log.info("Discord slash commands registering (global)...");
     await client.application.commands.set(applicationCommands);
