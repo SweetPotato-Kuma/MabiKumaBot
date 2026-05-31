@@ -1,3 +1,6 @@
+import { resolveAuctionCategory } from "./auctionCategories.js";
+import { hasAuctionOptionFilters, matchesAuctionOptionFilters, normalizeAuctionOptionFilters } from "./auctionFilters.js";
+
 export class MabinogiApiError extends Error {
   constructor(message, { status, body } = {}) {
     super(message);
@@ -85,6 +88,7 @@ function dedupeAuctionItems(items) {
       item.auction_item_category,
       item.auction_price_per_unit,
       item.date_auction_expire,
+      JSON.stringify(item.item_option ?? []),
     ].join("|");
 
     if (!seen.has(key)) {
@@ -94,6 +98,18 @@ function dedupeAuctionItems(items) {
   }
 
   return result;
+}
+
+function mapAuctionItem(auctionItem) {
+  return {
+    itemName: String(auctionItem.item_name ?? ""),
+    displayName: String(auctionItem.item_display_name ?? ""),
+    category: String(auctionItem.auction_item_category ?? ""),
+    count: Number(auctionItem.item_count ?? 0),
+    expireAt: auctionItem.date_auction_expire ?? null,
+    pricePerUnit: asPositiveNumber(auctionItem.auction_price_per_unit),
+    itemOptions: Array.isArray(auctionItem.item_option) ? auctionItem.item_option : [],
+  };
 }
 
 export class MabinogiClient {
@@ -121,9 +137,12 @@ export class MabinogiClient {
     }
   }
 
-  async fetchAuctionItems(keyword) {
+  async fetchAuctionPage(keyword, cursor = "") {
     const url = new URL(this.endpoint);
     url.searchParams.set("keyword", keyword);
+    if (cursor) {
+      url.searchParams.set("cursor", cursor);
+    }
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -155,36 +174,66 @@ export class MabinogiClient {
     }
 
     const data = await response.json();
-    return Array.isArray(data.auction_item) ? data.auction_item : [];
+    return {
+      items: Array.isArray(data.auction_item) ? data.auction_item : [],
+      nextCursor: typeof data.next_cursor === "string" && data.next_cursor ? data.next_cursor : null,
+    };
   }
 
-  async fetchMarketData(itemName) {
+  async fetchAuctionItems(keyword, { maxPages = 1 } = {}) {
+    const items = [];
+    let cursor = "";
+
+    for (let page = 0; page < maxPages; page += 1) {
+      const result = await this.fetchAuctionPage(keyword, cursor);
+      items.push(...result.items);
+
+      if (!result.nextCursor) {
+        break;
+      }
+
+      cursor = result.nextCursor;
+    }
+
+    return items;
+  }
+
+  async fetchMarketData(itemName, { category = "", optionFilters = {} } = {}) {
     if (!this.hasApiKey()) {
       throw new MabinogiApiError("API_KEY 또는 MABINOGI_API_KEY가 설정되지 않았습니다.");
     }
 
     const normalizedTarget = compactSearchText(itemName);
-    const cachedKeyword = this.resolvedKeywordCache.get(normalizedTarget);
+    const normalizedCategory = String(category ?? "").trim();
+    const categoryResolution = resolveAuctionCategory(normalizedCategory);
+    if (normalizedCategory && !categoryResolution) {
+      throw new MabinogiApiError(`알 수 없는 경매장 카테고리입니다: ${normalizedCategory}`);
+    }
+
+    const targetCategories = categoryResolution?.categories ?? [];
+    const normalizedOptionFilters = normalizeAuctionOptionFilters(optionFilters);
+    const cacheKey = `${normalizedTarget}|${categoryResolution?.label ?? ""}`;
+    const cachedKeyword = this.resolvedKeywordCache.get(cacheKey);
     const searchKeywords = [...new Set(cachedKeyword ? [cachedKeyword, ...buildKeywordCandidates(itemName)] : buildKeywordCandidates(itemName))];
     const searchedKeywords = [];
     const allAuctionItems = [];
     let matchingItems = [];
+    const maxPages = targetCategories.length > 0 || hasAuctionOptionFilters(normalizedOptionFilters) ? 5 : 1;
 
     for (const keyword of searchKeywords) {
       searchedKeywords.push(keyword);
-      const auctionItems = await this.fetchAuctionItems(keyword);
+      const auctionItems = await this.fetchAuctionItems(keyword, { maxPages });
       allAuctionItems.push(...auctionItems);
 
       matchingItems = dedupeAuctionItems(allAuctionItems)
-        .map((auctionItem) => ({
-          itemName: String(auctionItem.item_name ?? ""),
-          displayName: String(auctionItem.item_display_name ?? ""),
-          category: String(auctionItem.auction_item_category ?? ""),
-          count: Number(auctionItem.item_count ?? 0),
-          expireAt: auctionItem.date_auction_expire ?? null,
-          pricePerUnit: asPositiveNumber(auctionItem.auction_price_per_unit),
-        }))
-        .filter((auctionItem) => compactSearchText(auctionItem.displayName).includes(normalizedTarget) && auctionItem.pricePerUnit !== null)
+        .map(mapAuctionItem)
+        .filter(
+          (auctionItem) =>
+            compactSearchText(auctionItem.displayName).includes(normalizedTarget) &&
+            auctionItem.pricePerUnit !== null &&
+            (targetCategories.length === 0 || targetCategories.includes(auctionItem.category)) &&
+            matchesAuctionOptionFilters(auctionItem, normalizedOptionFilters),
+        )
         .sort((a, b) => a.pricePerUnit - b.pricePerUnit);
 
       if (matchingItems.length >= 2) {
@@ -197,6 +246,9 @@ export class MabinogiClient {
         found: false,
         itemName,
         resolvedItemName: matchingItems[0]?.displayName ?? itemName,
+        category: categoryResolution?.label ?? "",
+        categoryMatches: targetCategories,
+        optionFilters: normalizedOptionFilters,
         searchKeywords: searchedKeywords,
         rawCount: dedupeAuctionItems(allAuctionItems).length,
         matchingCount: matchingItems.length,
@@ -206,12 +258,15 @@ export class MabinogiClient {
     const [lowestItem, nextItem] = matchingItems;
     const resolvedItemName = lowestItem.displayName || itemName;
     const discountRate = 1 - lowestItem.pricePerUnit / nextItem.pricePerUnit;
-    this.resolvedKeywordCache.set(normalizedTarget, resolvedItemName);
+    this.resolvedKeywordCache.set(cacheKey, resolvedItemName);
 
     return {
       found: true,
       itemName,
       resolvedItemName,
+      category: categoryResolution?.label ?? "",
+      categoryMatches: targetCategories,
+      optionFilters: normalizedOptionFilters,
       searchKeywords: searchedKeywords,
       rawCount: dedupeAuctionItems(allAuctionItems).length,
       matchingCount: matchingItems.length,

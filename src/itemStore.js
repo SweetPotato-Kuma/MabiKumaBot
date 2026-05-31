@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { resolveAuctionCategory } from "./auctionCategories.js";
+import { formatAuctionOptionFilters, hasAuctionOptionFilters, normalizeAuctionOptionFilters } from "./auctionFilters.js";
+
 export function normalizeItemName(itemName) {
   return String(itemName ?? "")
     .trim()
@@ -14,17 +17,73 @@ export function normalizeItemKey(itemName) {
     .replace(/[\s"'`.,/\\|()[\]{}<>:;!?~_\-+*=]+/g, "");
 }
 
-function itemPreferenceScore(itemName) {
+function itemPreferenceScore(item) {
+  const itemName = typeof item === "string" ? item : item.itemName;
   const hasSpacing = /\s/.test(itemName) ? 10 : 0;
   return hasSpacing + itemName.length / 1000;
+}
+
+export function normalizeMonitoringItem(item) {
+  if (typeof item === "string") {
+    const itemName = normalizeItemName(item);
+    return itemName ? { itemName, category: "", optionFilters: {} } : null;
+  }
+
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    return null;
+  }
+
+  const itemName = normalizeItemName(item.itemName ?? item.name);
+  if (!itemName) {
+    return null;
+  }
+
+  const resolvedCategory = resolveAuctionCategory(item.category);
+  const category = resolvedCategory?.label === "전체" ? "" : resolvedCategory?.label ?? "";
+
+  return {
+    itemName,
+    category,
+    optionFilters: normalizeAuctionOptionFilters(item.optionFilters),
+  };
+}
+
+export function monitoringItemKey(item) {
+  const normalized = normalizeMonitoringItem(item);
+  if (!normalized) {
+    return "";
+  }
+
+  return [
+    normalizeItemKey(normalized.itemName),
+    normalizeItemKey(normalized.category),
+    JSON.stringify(normalized.optionFilters),
+  ].join("|");
+}
+
+export function formatMonitoringItem(item) {
+  const normalized = normalizeMonitoringItem(item);
+  if (!normalized) {
+    return "";
+  }
+
+  const details = [];
+  if (normalized.category) {
+    details.push(`카테고리: ${normalized.category}`);
+  }
+  if (hasAuctionOptionFilters(normalized.optionFilters)) {
+    details.push(formatAuctionOptionFilters(normalized.optionFilters));
+  }
+
+  return details.length > 0 ? `${normalized.itemName} (${details.join(", ")})` : normalized.itemName;
 }
 
 function uniqueItems(items) {
   const indexByKey = new Map();
   const result = [];
 
-  for (const item of items.map(normalizeItemName).filter(Boolean)) {
-    const key = normalizeItemKey(item);
+  for (const item of items.map(normalizeMonitoringItem).filter(Boolean)) {
+    const key = monitoringItemKey(item);
     const existingIndex = indexByKey.get(key);
 
     if (existingIndex === undefined) {
@@ -58,6 +117,30 @@ function normalizeUsers(rawUsers) {
   }
 
   return users;
+}
+
+function removalKeys(item) {
+  const keys = new Set();
+  const normalized = normalizeMonitoringItem(item);
+  if (normalized) {
+    keys.add(monitoringItemKey(normalized));
+    keys.add(normalizeItemKey(formatMonitoringItem(normalized)));
+  }
+
+  const rawText = typeof item === "string" ? normalizeItemName(item) : "";
+  if (rawText) {
+    keys.add(normalizeItemKey(rawText));
+  }
+
+  return keys;
+}
+
+function matchesRemovalKeys(item, keys) {
+  return (
+    keys.has(monitoringItemKey(item)) ||
+    keys.has(normalizeItemKey(formatMonitoringItem(item))) ||
+    keys.has(normalizeItemKey(item.itemName))
+  );
 }
 
 export class ItemStore {
@@ -141,6 +224,19 @@ export class ItemStore {
       return uniqueItems([
         ...this.legacyItems,
         ...Object.values(this.users).flatMap((userData) => (Array.isArray(userData.items) ? userData.items : [])),
+      ]).map(formatMonitoringItem);
+    }
+
+    return [...(this.users[userId]?.items ?? [])].map(formatMonitoringItem);
+  }
+
+  getEntries(userId = null) {
+    this.assertLoaded();
+
+    if (!userId) {
+      return uniqueItems([
+        ...this.legacyItems,
+        ...Object.values(this.users).flatMap((userData) => (Array.isArray(userData.items) ? userData.items : [])),
       ]);
     }
 
@@ -159,24 +255,36 @@ export class ItemStore {
     this.assertUserId(userId);
     await this.ensureUser(userId);
 
-    const normalized = normalizeItemName(itemName);
+    const normalized = normalizeMonitoringItem(itemName);
     if (!normalized) {
       return { added: false, reason: "empty", items: this.getAll(userId) };
     }
 
     const userItems = this.users[userId].items;
-    const normalizedKey = normalizeItemKey(normalized);
-    const existingIndex = userItems.findIndex((item) => normalizeItemKey(item) === normalizedKey);
+    const normalizedKey = monitoringItemKey(normalized);
+    const existingIndex = userItems.findIndex((item) => monitoringItemKey(item) === normalizedKey);
     const existingItem = existingIndex === -1 ? null : userItems[existingIndex];
 
     if (existingItem) {
       if (itemPreferenceScore(normalized) > itemPreferenceScore(existingItem)) {
         userItems[existingIndex] = normalized;
         await this.save();
-        return { added: false, reason: "duplicate", existingItem: normalized, updatedExisting: true, items: this.getAll(userId) };
+        return {
+          added: false,
+          reason: "duplicate",
+          existingItem: formatMonitoringItem(normalized),
+          updatedExisting: true,
+          items: this.getAll(userId),
+        };
       }
 
-      return { added: false, reason: "duplicate", existingItem, updatedExisting: false, items: this.getAll(userId) };
+      return {
+        added: false,
+        reason: "duplicate",
+        existingItem: formatMonitoringItem(existingItem),
+        updatedExisting: false,
+        items: this.getAll(userId),
+      };
     }
 
     userItems.push(normalized);
@@ -189,9 +297,9 @@ export class ItemStore {
     this.assertUserId(userId);
     await this.ensureUser(userId);
 
-    const normalizedKey = normalizeItemKey(itemName);
+    const keysToRemove = removalKeys(itemName);
     const userItems = this.users[userId].items;
-    const nextItems = userItems.filter((item) => normalizeItemKey(item) !== normalizedKey);
+    const nextItems = userItems.filter((item) => !matchesRemovalKeys(item, keysToRemove));
 
     if (nextItems.length === userItems.length) {
       return { removed: false, items: this.getAll(userId) };
@@ -199,7 +307,12 @@ export class ItemStore {
 
     this.users[userId].items = nextItems;
     await this.save();
-    return { removed: true, items: this.getAll(userId) };
+    return {
+      removed: true,
+      removedItem: formatMonitoringItem(itemName),
+      removedEntry: normalizeMonitoringItem(itemName),
+      items: this.getAll(userId),
+    };
   }
 
   async removeMany(userId, itemNames) {
@@ -207,10 +320,10 @@ export class ItemStore {
     this.assertUserId(userId);
     await this.ensureUser(userId);
 
-    const keysToRemove = new Set(itemNames.map(normalizeItemKey));
+    const keysToRemove = new Set(itemNames.flatMap((itemName) => [...removalKeys(itemName)]));
     const userItems = this.users[userId].items;
-    const removedItems = userItems.filter((item) => keysToRemove.has(normalizeItemKey(item)));
-    const nextItems = userItems.filter((item) => !keysToRemove.has(normalizeItemKey(item)));
+    const removedItems = userItems.filter((item) => matchesRemovalKeys(item, keysToRemove));
+    const nextItems = userItems.filter((item) => !matchesRemovalKeys(item, keysToRemove));
 
     if (nextItems.length === userItems.length) {
       return { removed: false, removedItems: [], items: this.getAll(userId) };
@@ -218,7 +331,12 @@ export class ItemStore {
 
     this.users[userId].items = nextItems;
     await this.save();
-    return { removed: true, removedItems, items: this.getAll(userId) };
+    return {
+      removed: true,
+      removedItems: removedItems.map(formatMonitoringItem),
+      removedEntries: removedItems,
+      items: this.getAll(userId),
+    };
   }
 
   shouldRewrite(parsed) {

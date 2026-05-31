@@ -1,7 +1,8 @@
 import { EmbedBuilder } from "discord.js";
 
+import { formatAuctionOptionFilters, hasAuctionOptionFilters } from "./auctionFilters.js";
 import { formatGold, formatPercent } from "./format.js";
-import { normalizeItemKey } from "./itemStore.js";
+import { formatMonitoringItem, monitoringItemKey, normalizeMonitoringItem } from "./itemStore.js";
 
 function sleep(ms) {
   return new Promise((resolve) => {
@@ -155,18 +156,28 @@ export class PriceMonitor {
   async checkItem(userId, itemName) {
     const alertDiscountPercent = this.settingsStore.getAlertDiscountPercent(userId, this.defaultAlertDiscountPercent);
     const alertDiscountRate = alertDiscountPercent / 100;
+    const monitoringItem = normalizeMonitoringItem(itemName);
+    if (!monitoringItem) {
+      this.logger.warn(`Invalid monitoring item skipped. user=${userId}`);
+      return null;
+    }
+
+    const itemLabel = formatMonitoringItem(monitoringItem);
 
     try {
-      const marketData = await this.mabinogiClient.fetchMarketData(itemName);
+      const marketData = await this.mabinogiClient.fetchMarketData(monitoringItem.itemName, {
+        category: monitoringItem.category,
+        optionFilters: monitoringItem.optionFilters,
+      });
       if (!marketData.found) {
         this.logger.warn(
-          `${itemName}: insufficient auction data. raw=${marketData.rawCount}, matching=${marketData.matchingCount}`,
+          `${itemLabel}: insufficient auction data. raw=${marketData.rawCount}, matching=${marketData.matchingCount}`,
         );
         return null;
       }
 
       this.logger.info(
-        `${itemName} -> ${marketData.resolvedItemName}: lowest=${marketData.lowestPrice.toLocaleString("ko-KR")}, next=${marketData.nextPrice.toLocaleString(
+        `${itemLabel} -> ${marketData.resolvedItemName}: lowest=${marketData.lowestPrice.toLocaleString("ko-KR")}, next=${marketData.nextPrice.toLocaleString(
           "ko-KR",
         )}, discount=${formatPercent(marketData.discountRate)}, user=${userId}, threshold=${alertDiscountPercent}%`,
       );
@@ -179,13 +190,17 @@ export class PriceMonitor {
 
       return marketData;
     } catch (error) {
-      this.logger.error(`${itemName}: price check failed:`, error);
+      this.logger.error(`${itemLabel}: price check failed:`, error);
       return null;
     }
   }
 
   async sendAlertIfAllowed(userId, marketData, alertDiscountPercent) {
-    const key = this.buildCooldownKey(userId, marketData.itemName);
+    const key = this.buildCooldownKey(userId, {
+      itemName: marketData.itemName,
+      category: marketData.category,
+      optionFilters: marketData.optionFilters,
+    });
     const now = Date.now();
     const lastAlertAt = this.lastAlertAtByItem.get(key) ?? 0;
 
@@ -217,6 +232,7 @@ export class PriceMonitor {
       .setColor(0xe03131)
       .setDescription(`기준가 대비 ${alertDiscountPercent}% 이상 낮은 매물을 찾았습니다.`)
       .addFields(
+        { name: "카테고리", value: marketData.category || marketData.lowestItem.category || "전체", inline: true },
         { name: "최저 등록가", value: formatGold(marketData.lowestPrice), inline: true },
         { name: "기준가(차순위)", value: formatGold(marketData.nextPrice), inline: true },
         { name: "할인율", value: formatPercent(marketData.discountRate), inline: true },
@@ -225,12 +241,16 @@ export class PriceMonitor {
       .setFooter({ text: "Nexon Open API 경매장 데이터 기준" })
       .setTimestamp(new Date());
 
+    if (hasAuctionOptionFilters(marketData.optionFilters)) {
+      embed.addFields({ name: "추가 옵션", value: formatAuctionOptionFilters(marketData.optionFilters), inline: false });
+    }
+
     await channel.send({ content: `<@${userId}> 구마가 매물을 찾았습니다: **${marketData.resolvedItemName}**`, embeds: [embed] });
     this.lastAlertAtByItem.set(key, now);
     this.logger.info(`${marketData.itemName}: alert sent. user=${userId}`);
   }
 
   buildCooldownKey(userId, itemName) {
-    return `${userId ?? "global"}:${normalizeItemKey(itemName)}`;
+    return `${userId ?? "global"}:${monitoringItemKey(itemName)}`;
   }
 }
