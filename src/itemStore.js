@@ -1,9 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { resolveAuctionCategory } from "./auctionCategories.js";
-import { formatAuctionOptionFilters, hasAuctionOptionFilters, normalizeAuctionOptionFilters } from "./auctionFilters.js";
-
 export function normalizeItemName(itemName) {
   return String(itemName ?? "")
     .trim()
@@ -17,48 +14,65 @@ export function normalizeItemKey(itemName) {
     .replace(/[\s"'`.,/\\|()[\]{}<>:;!?~_\-+*=]+/g, "");
 }
 
-function itemPreferenceScore(item) {
-  const itemName = typeof item === "string" ? item : item.itemName;
-  const hasSpacing = /\s/.test(itemName) ? 10 : 0;
-  return hasSpacing + itemName.length / 1000;
+function uniqueNames(values) {
+  const seen = new Set();
+  const result = [];
+
+  for (const value of values ?? []) {
+    const normalized = normalizeItemName(value);
+    const key = normalizeItemKey(normalized);
+    if (!normalized || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    result.push(normalized);
+  }
+
+  return result;
 }
 
 export function normalizeMonitoringItem(item) {
-  if (typeof item === "string") {
-    const itemName = normalizeItemName(item);
-    return itemName ? { itemName, category: "", optionFilters: {} } : null;
-  }
+  const rawItemName =
+    typeof item === "string"
+      ? item
+      : item && typeof item === "object" && !Array.isArray(item)
+        ? item.itemName ?? item.name
+        : "";
+  const itemName = normalizeItemName(rawItemName);
 
-  if (!item || typeof item !== "object" || Array.isArray(item)) {
-    return null;
-  }
-
-  const itemName = normalizeItemName(item.itemName ?? item.name);
   if (!itemName) {
     return null;
   }
 
-  const resolvedCategory = resolveAuctionCategory(item.category);
-  const category = resolvedCategory?.label === "전체" ? "" : resolvedCategory?.label ?? "";
+  const category =
+    item && typeof item === "object" && !Array.isArray(item) ? normalizeItemName(item.category ?? item.auctionItemCategory) : "";
+  const searchTerms =
+    item && typeof item === "object" && !Array.isArray(item)
+      ? uniqueNames([...(Array.isArray(item.searchTerms) ? item.searchTerms : []), itemName])
+      : uniqueNames([itemName]);
 
   return {
     itemName,
     category,
-    optionFilters: normalizeAuctionOptionFilters(item.optionFilters),
+    searchTerms,
   };
 }
 
-export function monitoringItemKey(item) {
+function serializeMonitoringItem(item) {
   const normalized = normalizeMonitoringItem(item);
   if (!normalized) {
-    return "";
+    return null;
   }
 
-  return [
-    normalizeItemKey(normalized.itemName),
-    normalizeItemKey(normalized.category),
-    JSON.stringify(normalized.optionFilters),
-  ].join("|");
+  return {
+    itemName: normalized.itemName,
+    ...(normalized.category ? { category: normalized.category } : {}),
+    ...(normalized.searchTerms.length > 1 ||
+    (normalized.searchTerms.length === 1 && normalizeItemKey(normalized.searchTerms[0]) !== normalizeItemKey(normalized.itemName))
+      ? { searchTerms: normalized.searchTerms }
+      : {}),
+  };
 }
 
 export function formatMonitoringItem(item) {
@@ -67,22 +81,35 @@ export function formatMonitoringItem(item) {
     return "";
   }
 
-  const details = [];
-  if (normalized.category) {
-    details.push(`카테고리: ${normalized.category}`);
-  }
-  if (hasAuctionOptionFilters(normalized.optionFilters)) {
-    details.push(formatAuctionOptionFilters(normalized.optionFilters));
+  return normalized.category ? `${normalized.itemName} [${normalized.category}]` : normalized.itemName;
+}
+
+export function monitoringItemKey(item) {
+  const normalized = normalizeMonitoringItem(item);
+  if (!normalized) {
+    return "";
   }
 
-  return details.length > 0 ? `${normalized.itemName} (${details.join(", ")})` : normalized.itemName;
+  return normalizeItemKey(normalized.itemName);
+}
+
+function itemPreferenceScore(item) {
+  const normalized = normalizeMonitoringItem(item);
+  if (!normalized) {
+    return 0;
+  }
+
+  const hasSpacing = /\s/.test(normalized.itemName) ? 10 : 0;
+  const hasCategory = normalized.category ? 20 : 0;
+  const searchTermScore = normalized.searchTerms.length;
+  return hasCategory + hasSpacing + searchTermScore + normalized.itemName.length / 1000;
 }
 
 function uniqueItems(items) {
   const indexByKey = new Map();
   const result = [];
 
-  for (const item of items.map(normalizeMonitoringItem).filter(Boolean)) {
+  for (const item of items.map(serializeMonitoringItem).filter(Boolean)) {
     const key = monitoringItemKey(item);
     const existingIndex = indexByKey.get(key);
 
@@ -120,26 +147,34 @@ function normalizeUsers(rawUsers) {
 }
 
 function removalKeys(item) {
-  const keys = new Set();
   const normalized = normalizeMonitoringItem(item);
+  const keys = new Set();
+
   if (normalized) {
     keys.add(monitoringItemKey(normalized));
     keys.add(normalizeItemKey(formatMonitoringItem(normalized)));
+    for (const searchTerm of normalized.searchTerms) {
+      keys.add(normalizeItemKey(searchTerm));
+    }
   }
 
-  const rawText = typeof item === "string" ? normalizeItemName(item) : "";
-  if (rawText) {
-    keys.add(normalizeItemKey(rawText));
+  if (typeof item === "string") {
+    keys.add(normalizeItemKey(item));
   }
 
   return keys;
 }
 
 function matchesRemovalKeys(item, keys) {
+  const normalized = normalizeMonitoringItem(item);
+  if (!normalized) {
+    return false;
+  }
+
   return (
-    keys.has(monitoringItemKey(item)) ||
-    keys.has(normalizeItemKey(formatMonitoringItem(item))) ||
-    keys.has(normalizeItemKey(item.itemName))
+    keys.has(monitoringItemKey(normalized)) ||
+    keys.has(normalizeItemKey(formatMonitoringItem(normalized))) ||
+    normalized.searchTerms.some((searchTerm) => keys.has(normalizeItemKey(searchTerm)))
   );
 }
 
@@ -218,16 +253,7 @@ export class ItemStore {
   }
 
   getAll(userId = null) {
-    this.assertLoaded();
-
-    if (!userId) {
-      return uniqueItems([
-        ...this.legacyItems,
-        ...Object.values(this.users).flatMap((userData) => (Array.isArray(userData.items) ? userData.items : [])),
-      ]).map(formatMonitoringItem);
-    }
-
-    return [...(this.users[userId]?.items ?? [])].map(formatMonitoringItem);
+    return this.getEntries(userId).map(formatMonitoringItem);
   }
 
   getEntries(userId = null) {
@@ -240,13 +266,13 @@ export class ItemStore {
       ]);
     }
 
-    return [...(this.users[userId]?.items ?? [])];
+    return uniqueItems(this.users[userId]?.items ?? []);
   }
 
   getUsers() {
     this.assertLoaded();
     return Object.entries(this.users)
-      .map(([userId, userData]) => ({ userId, items: [...(userData.items ?? [])] }))
+      .map(([userId, userData]) => ({ userId, items: uniqueItems(userData.items ?? []) }))
       .filter((userData) => userData.items.length > 0);
   }
 
@@ -255,7 +281,7 @@ export class ItemStore {
     this.assertUserId(userId);
     await this.ensureUser(userId);
 
-    const normalized = normalizeMonitoringItem(itemName);
+    const normalized = serializeMonitoringItem(itemName);
     if (!normalized) {
       return { added: false, reason: "empty", items: this.getAll(userId) };
     }
@@ -263,7 +289,7 @@ export class ItemStore {
     const userItems = this.users[userId].items;
     const normalizedKey = monitoringItemKey(normalized);
     const existingIndex = userItems.findIndex((item) => monitoringItemKey(item) === normalizedKey);
-    const existingItem = existingIndex === -1 ? null : userItems[existingIndex];
+    const existingItem = existingIndex === -1 ? null : serializeMonitoringItem(userItems[existingIndex]);
 
     if (existingItem) {
       if (itemPreferenceScore(normalized) > itemPreferenceScore(existingItem)) {
@@ -289,7 +315,7 @@ export class ItemStore {
 
     userItems.push(normalized);
     await this.save();
-    return { added: true, items: this.getAll(userId) };
+    return { added: true, item: normalized, items: this.getAll(userId) };
   }
 
   async remove(userId, itemName) {
@@ -307,12 +333,7 @@ export class ItemStore {
 
     this.users[userId].items = nextItems;
     await this.save();
-    return {
-      removed: true,
-      removedItem: formatMonitoringItem(itemName),
-      removedEntry: normalizeMonitoringItem(itemName),
-      items: this.getAll(userId),
-    };
+    return { removed: true, items: this.getAll(userId) };
   }
 
   async removeMany(userId, itemNames) {
@@ -331,12 +352,7 @@ export class ItemStore {
 
     this.users[userId].items = nextItems;
     await this.save();
-    return {
-      removed: true,
-      removedItems: removedItems.map(formatMonitoringItem),
-      removedEntries: removedItems,
-      items: this.getAll(userId),
-    };
+    return { removed: true, removedItems: removedItems.map(formatMonitoringItem), items: this.getAll(userId) };
   }
 
   shouldRewrite(parsed) {

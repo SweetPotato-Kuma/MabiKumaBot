@@ -1,6 +1,5 @@
 import { EmbedBuilder } from "discord.js";
 
-import { formatAuctionOptionFilters, hasAuctionOptionFilters } from "./auctionFilters.js";
 import { formatGold, formatPercent } from "./format.js";
 import { formatMonitoringItem, monitoringItemKey, normalizeMonitoringItem } from "./itemStore.js";
 
@@ -146,17 +145,17 @@ export class PriceMonitor {
 
     this.logger.info(`Checking ${itemCount} monitoring item(s) for ${users.length} user(s).`);
     for (const userData of users) {
-      for (const itemName of userData.items) {
-        await this.checkItem(userData.userId, itemName);
+      for (const item of userData.items) {
+        await this.checkItem(userData.userId, item);
         await sleep(250);
       }
     }
   }
 
-  async checkItem(userId, itemName) {
+  async checkItem(userId, item) {
     const alertDiscountPercent = this.settingsStore.getAlertDiscountPercent(userId, this.defaultAlertDiscountPercent);
     const alertDiscountRate = alertDiscountPercent / 100;
-    const monitoringItem = normalizeMonitoringItem(itemName);
+    const monitoringItem = normalizeMonitoringItem(item);
     if (!monitoringItem) {
       this.logger.warn(`Invalid monitoring item skipped. user=${userId}`);
       return null;
@@ -165,10 +164,7 @@ export class PriceMonitor {
     const itemLabel = formatMonitoringItem(monitoringItem);
 
     try {
-      const marketData = await this.mabinogiClient.fetchMarketData(monitoringItem.itemName, {
-        category: monitoringItem.category,
-        optionFilters: monitoringItem.optionFilters,
-      });
+      const marketData = await this.mabinogiClient.fetchMarketData(monitoringItem);
       if (!marketData.found) {
         this.logger.warn(
           `${itemLabel}: insufficient auction data. raw=${marketData.rawCount}, matching=${marketData.matchingCount}`,
@@ -185,7 +181,7 @@ export class PriceMonitor {
       if (marketData.discountRate >= alertDiscountRate) {
         await this.sendAlertIfAllowed(userId, marketData, alertDiscountPercent);
       } else {
-        this.clearCooldown(userId, itemName);
+        this.clearCooldown(userId, monitoringItem);
       }
 
       return marketData;
@@ -199,7 +195,7 @@ export class PriceMonitor {
     const key = this.buildCooldownKey(userId, {
       itemName: marketData.itemName,
       category: marketData.category,
-      optionFilters: marketData.optionFilters,
+      searchTerms: marketData.searchTerms,
     });
     const now = Date.now();
     const lastAlertAt = this.lastAlertAtByItem.get(key) ?? 0;
@@ -232,7 +228,7 @@ export class PriceMonitor {
       .setColor(0xe03131)
       .setDescription(`기준가 대비 ${alertDiscountPercent}% 이상 낮은 매물을 찾았습니다.`)
       .addFields(
-        { name: "카테고리", value: marketData.category || marketData.lowestItem.category || "전체", inline: true },
+        ...(marketData.category ? [{ name: "자동 분류", value: marketData.category, inline: true }] : []),
         { name: "최저 등록가", value: formatGold(marketData.lowestPrice), inline: true },
         { name: "기준가(차순위)", value: formatGold(marketData.nextPrice), inline: true },
         { name: "할인율", value: formatPercent(marketData.discountRate), inline: true },
@@ -240,10 +236,6 @@ export class PriceMonitor {
       )
       .setFooter({ text: "Nexon Open API 경매장 데이터 기준" })
       .setTimestamp(new Date());
-
-    if (hasAuctionOptionFilters(marketData.optionFilters)) {
-      embed.addFields({ name: "추가 옵션", value: formatAuctionOptionFilters(marketData.optionFilters), inline: false });
-    }
 
     await channel.send({ content: `<@${userId}> 구마가 매물을 찾았습니다: **${marketData.resolvedItemName}**`, embeds: [embed] });
     this.lastAlertAtByItem.set(key, now);

@@ -6,7 +6,7 @@ import { ItemStore } from "./itemStore.js";
 import { logger } from "./logger.js";
 import { MabinogiClient } from "./mabinogiApi.js";
 import { PriceMonitor } from "./monitor.js";
-import { registerCommandsWithClient } from "./registerCommands.js";
+import { registerCommandsForGuild, registerCommandsWithClient } from "./registerCommands.js";
 import { SettingsStore } from "./settingsStore.js";
 
 async function main() {
@@ -59,6 +59,19 @@ async function main() {
     }
 
     monitor.start();
+  });
+
+  discordClient.on(Events.GuildCreate, async (guild) => {
+    if (!config.autoDeployCommands) {
+      return;
+    }
+
+    try {
+      logger.info(`Discord slash commands registering (new guild ${guild.id})...`);
+      await registerCommandsForGuild(guild, logger);
+    } catch (error) {
+      logger.error(`Slash command registration failed for new guild ${guild.id}:`, error);
+    }
   });
 
   discordClient.on(Events.InteractionCreate, async (interaction) => {
