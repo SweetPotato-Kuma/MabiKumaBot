@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+const GLOBAL_SCOPE_ID = "global";
+
 export function normalizeItemName(itemName) {
   return String(itemName ?? "")
     .trim()
@@ -12,6 +14,10 @@ export function normalizeItemKey(itemName) {
     .normalize("NFKC")
     .toLocaleLowerCase("ko-KR")
     .replace(/[\s"'`.,/\\|()[\]{}<>:;!?~_\-+*=]+/g, "");
+}
+
+function normalizeScopeId(value) {
+  return String(value ?? "").trim() || GLOBAL_SCOPE_ID;
 }
 
 function uniqueNames(values) {
@@ -47,6 +53,8 @@ export function normalizeMonitoringItem(item) {
 
   const category =
     item && typeof item === "object" && !Array.isArray(item) ? normalizeItemName(item.category ?? item.auctionItemCategory) : "";
+  const listItemName =
+    item && typeof item === "object" && !Array.isArray(item) ? normalizeItemName(item.listItemName ?? item.auctionListItemName) : "";
   const searchTerms =
     item && typeof item === "object" && !Array.isArray(item)
       ? uniqueNames([...(Array.isArray(item.searchTerms) ? item.searchTerms : []), itemName])
@@ -55,6 +63,7 @@ export function normalizeMonitoringItem(item) {
   return {
     itemName,
     category,
+    listItemName,
     searchTerms,
   };
 }
@@ -68,6 +77,9 @@ function serializeMonitoringItem(item) {
   return {
     itemName: normalized.itemName,
     ...(normalized.category ? { category: normalized.category } : {}),
+    ...(normalized.listItemName && normalizeItemKey(normalized.listItemName) !== normalizeItemKey(normalized.itemName)
+      ? { listItemName: normalized.listItemName }
+      : {}),
     ...(normalized.searchTerms.length > 1 ||
     (normalized.searchTerms.length === 1 && normalizeItemKey(normalized.searchTerms[0]) !== normalizeItemKey(normalized.itemName))
       ? { searchTerms: normalized.searchTerms }
@@ -101,8 +113,9 @@ function itemPreferenceScore(item) {
 
   const hasSpacing = /\s/.test(normalized.itemName) ? 10 : 0;
   const hasCategory = normalized.category ? 20 : 0;
+  const hasListItemName = normalized.listItemName ? 10 : 0;
   const searchTermScore = normalized.searchTerms.length;
-  return hasCategory + hasSpacing + searchTermScore + normalized.itemName.length / 1000;
+  return hasCategory + hasListItemName + hasSpacing + searchTermScore + normalized.itemName.length / 1000;
 }
 
 function uniqueItems(items) {
@@ -127,23 +140,33 @@ function uniqueItems(items) {
   return result;
 }
 
-function normalizeUsers(rawUsers) {
-  if (!rawUsers || typeof rawUsers !== "object" || Array.isArray(rawUsers)) {
+function normalizeScopes(rawScopes) {
+  if (!rawScopes || typeof rawScopes !== "object" || Array.isArray(rawScopes)) {
     return {};
   }
 
-  const users = {};
-  for (const [userId, userData] of Object.entries(rawUsers)) {
-    if (!userId || !userData || typeof userData !== "object" || Array.isArray(userData)) {
+  const scopes = {};
+  for (const [scopeId, scopeData] of Object.entries(rawScopes)) {
+    if (!scopeData || typeof scopeData !== "object" || Array.isArray(scopeData)) {
       continue;
     }
 
-    users[userId] = {
-      items: uniqueItems(Array.isArray(userData.items) ? userData.items : []),
+    scopes[normalizeScopeId(scopeId)] = {
+      items: uniqueItems(Array.isArray(scopeData.items) ? scopeData.items : []),
     };
   }
 
-  return users;
+  return scopes;
+}
+
+function legacyUserItems(rawUsers) {
+  if (!rawUsers || typeof rawUsers !== "object" || Array.isArray(rawUsers)) {
+    return [];
+  }
+
+  return Object.values(rawUsers).flatMap((userData) =>
+    userData && typeof userData === "object" && !Array.isArray(userData) && Array.isArray(userData.items) ? userData.items : [],
+  );
 }
 
 function removalKeys(item) {
@@ -181,7 +204,7 @@ function matchesRemovalKeys(item, keys) {
 export class ItemStore {
   constructor({ filePath, initialItems = [] }) {
     this.filePath = filePath;
-    this.users = {};
+    this.scopes = {};
     this.legacyItems = uniqueItems(initialItems);
     this.loaded = false;
   }
@@ -189,58 +212,68 @@ export class ItemStore {
   async load() {
     await fs.mkdir(path.dirname(this.filePath), { recursive: true });
 
+    let parsed = {};
     try {
       const raw = await fs.readFile(this.filePath, "utf8");
-      const parsed = JSON.parse(raw);
-      this.users = normalizeUsers(parsed.users);
-      this.legacyItems = uniqueItems(
-        Array.isArray(parsed.legacyItems) ? parsed.legacyItems : Array.isArray(parsed.items) ? parsed.items : [],
-      );
-
-      if (this.shouldRewrite(parsed)) {
-        await this.save();
-      }
+      parsed = JSON.parse(raw);
     } catch (error) {
       if (error.code !== "ENOENT") {
         throw error;
       }
+    }
 
-      if (this.legacyItems.length > 0) {
-        await this.save();
-      }
+    this.scopes = normalizeScopes(parsed.scopes ?? parsed.guilds);
+    this.legacyItems = uniqueItems([
+      ...this.legacyItems,
+      ...(Array.isArray(parsed.legacyItems) ? parsed.legacyItems : []),
+      ...(Array.isArray(parsed.items) ? parsed.items : []),
+      ...legacyUserItems(parsed.users),
+    ]);
+
+    if (Object.keys(this.scopes).length === 0 && this.legacyItems.length > 0) {
+      this.scopes[GLOBAL_SCOPE_ID] = { items: [...this.legacyItems] };
+      this.legacyItems = [];
     }
 
     this.loaded = true;
-  }
 
-  async ensureUser(userId) {
-    this.assertLoaded();
-    this.assertUserId(userId);
-
-    if (this.users[userId]) {
-      return this.getAll(userId);
-    }
-
-    const hasExistingUsers = Object.keys(this.users).length > 0;
-    const shouldClaimLegacyItems = !hasExistingUsers && this.legacyItems.length > 0;
-
-    this.users[userId] = {
-      items: shouldClaimLegacyItems ? [...this.legacyItems] : [],
-    };
-
-    if (shouldClaimLegacyItems) {
-      this.legacyItems = [];
+    if (this.shouldRewrite(parsed)) {
       await this.save();
     }
+  }
 
-    return this.getAll(userId);
+  async ensureScope(scopeId) {
+    this.assertLoaded();
+    const normalizedScopeId = normalizeScopeId(scopeId);
+
+    if (this.scopes[normalizedScopeId]) {
+      return this.getAll(normalizedScopeId);
+    }
+
+    if (
+      normalizedScopeId !== GLOBAL_SCOPE_ID &&
+      this.scopes[GLOBAL_SCOPE_ID] &&
+      Object.keys(this.scopes).length === 1
+    ) {
+      this.scopes[normalizedScopeId] = { items: [...this.scopes[GLOBAL_SCOPE_ID].items] };
+      delete this.scopes[GLOBAL_SCOPE_ID];
+      await this.save();
+      return this.getAll(normalizedScopeId);
+    }
+
+    this.scopes[normalizedScopeId] = {
+      items: this.legacyItems.length > 0 ? [...this.legacyItems] : [],
+    };
+    this.legacyItems = [];
+    await this.save();
+    return this.getAll(normalizedScopeId);
   }
 
   async save() {
     await fs.mkdir(path.dirname(this.filePath), { recursive: true });
     const payload = JSON.stringify(
       {
-        users: this.users,
+        scopes: this.scopes,
         ...(this.legacyItems.length > 0 ? { legacyItems: this.legacyItems } : {}),
         updatedAt: new Date().toISOString(),
       },
@@ -252,55 +285,60 @@ export class ItemStore {
     await fs.rename(tempPath, this.filePath);
   }
 
-  getAll(userId = null) {
-    return this.getEntries(userId).map(formatMonitoringItem);
+  getAll(scopeId = null) {
+    return this.getEntries(scopeId).map(formatMonitoringItem);
   }
 
-  getEntries(userId = null) {
+  getEntries(scopeId = null) {
     this.assertLoaded();
 
-    if (!userId) {
+    if (!scopeId) {
       return uniqueItems([
         ...this.legacyItems,
-        ...Object.values(this.users).flatMap((userData) => (Array.isArray(userData.items) ? userData.items : [])),
+        ...Object.values(this.scopes).flatMap((scopeData) => (Array.isArray(scopeData.items) ? scopeData.items : [])),
       ]);
     }
 
-    return uniqueItems(this.users[userId]?.items ?? []);
+    const normalizedScopeId = normalizeScopeId(scopeId);
+    return uniqueItems(this.scopes[normalizedScopeId]?.items ?? this.scopes[GLOBAL_SCOPE_ID]?.items ?? []);
+  }
+
+  getScopes() {
+    this.assertLoaded();
+    return Object.entries(this.scopes)
+      .map(([scopeId, scopeData]) => ({ scopeId, items: uniqueItems(scopeData.items ?? []) }))
+      .filter((scopeData) => scopeData.items.length > 0);
   }
 
   getUsers() {
-    this.assertLoaded();
-    return Object.entries(this.users)
-      .map(([userId, userData]) => ({ userId, items: uniqueItems(userData.items ?? []) }))
-      .filter((userData) => userData.items.length > 0);
+    return this.getScopes().map(({ scopeId, items }) => ({ userId: scopeId, items }));
   }
 
-  async add(userId, itemName) {
+  async add(scopeId, itemName) {
     this.assertLoaded();
-    this.assertUserId(userId);
-    await this.ensureUser(userId);
+    await this.ensureScope(scopeId);
 
+    const normalizedScopeId = normalizeScopeId(scopeId);
     const normalized = serializeMonitoringItem(itemName);
     if (!normalized) {
-      return { added: false, reason: "empty", items: this.getAll(userId) };
+      return { added: false, reason: "empty", items: this.getAll(normalizedScopeId) };
     }
 
-    const userItems = this.users[userId].items;
+    const scopeItems = this.scopes[normalizedScopeId].items;
     const normalizedKey = monitoringItemKey(normalized);
-    const existingIndex = userItems.findIndex((item) => monitoringItemKey(item) === normalizedKey);
-    const existingItem = existingIndex === -1 ? null : serializeMonitoringItem(userItems[existingIndex]);
+    const existingIndex = scopeItems.findIndex((item) => monitoringItemKey(item) === normalizedKey);
+    const existingItem = existingIndex === -1 ? null : serializeMonitoringItem(scopeItems[existingIndex]);
 
     if (existingItem) {
       if (itemPreferenceScore(normalized) > itemPreferenceScore(existingItem)) {
-        userItems[existingIndex] = normalized;
+        scopeItems[existingIndex] = normalized;
         await this.save();
         return {
           added: false,
           reason: "duplicate",
           existingItem: formatMonitoringItem(normalized),
           updatedExisting: true,
-          items: this.getAll(userId),
+          items: this.getAll(normalizedScopeId),
         };
       }
 
@@ -309,50 +347,50 @@ export class ItemStore {
         reason: "duplicate",
         existingItem: formatMonitoringItem(existingItem),
         updatedExisting: false,
-        items: this.getAll(userId),
+        items: this.getAll(normalizedScopeId),
       };
     }
 
-    userItems.push(normalized);
+    scopeItems.push(normalized);
     await this.save();
-    return { added: true, item: normalized, items: this.getAll(userId) };
+    return { added: true, item: normalized, items: this.getAll(normalizedScopeId) };
   }
 
-  async remove(userId, itemName) {
+  async remove(scopeId, itemName) {
     this.assertLoaded();
-    this.assertUserId(userId);
-    await this.ensureUser(userId);
+    await this.ensureScope(scopeId);
 
+    const normalizedScopeId = normalizeScopeId(scopeId);
     const keysToRemove = removalKeys(itemName);
-    const userItems = this.users[userId].items;
-    const nextItems = userItems.filter((item) => !matchesRemovalKeys(item, keysToRemove));
+    const scopeItems = this.scopes[normalizedScopeId].items;
+    const nextItems = scopeItems.filter((item) => !matchesRemovalKeys(item, keysToRemove));
 
-    if (nextItems.length === userItems.length) {
-      return { removed: false, items: this.getAll(userId) };
+    if (nextItems.length === scopeItems.length) {
+      return { removed: false, items: this.getAll(normalizedScopeId) };
     }
 
-    this.users[userId].items = nextItems;
+    this.scopes[normalizedScopeId].items = nextItems;
     await this.save();
-    return { removed: true, items: this.getAll(userId) };
+    return { removed: true, items: this.getAll(normalizedScopeId) };
   }
 
-  async removeMany(userId, itemNames) {
+  async removeMany(scopeId, itemNames) {
     this.assertLoaded();
-    this.assertUserId(userId);
-    await this.ensureUser(userId);
+    await this.ensureScope(scopeId);
 
+    const normalizedScopeId = normalizeScopeId(scopeId);
     const keysToRemove = new Set(itemNames.flatMap((itemName) => [...removalKeys(itemName)]));
-    const userItems = this.users[userId].items;
-    const removedItems = userItems.filter((item) => matchesRemovalKeys(item, keysToRemove));
-    const nextItems = userItems.filter((item) => !matchesRemovalKeys(item, keysToRemove));
+    const scopeItems = this.scopes[normalizedScopeId].items;
+    const removedItems = scopeItems.filter((item) => matchesRemovalKeys(item, keysToRemove));
+    const nextItems = scopeItems.filter((item) => !matchesRemovalKeys(item, keysToRemove));
 
-    if (nextItems.length === userItems.length) {
-      return { removed: false, removedItems: [], items: this.getAll(userId) };
+    if (nextItems.length === scopeItems.length) {
+      return { removed: false, removedItems: [], items: this.getAll(normalizedScopeId) };
     }
 
-    this.users[userId].items = nextItems;
+    this.scopes[normalizedScopeId].items = nextItems;
     await this.save();
-    return { removed: true, removedItems: removedItems.map(formatMonitoringItem), items: this.getAll(userId) };
+    return { removed: true, removedItems: removedItems.map(formatMonitoringItem), items: this.getAll(normalizedScopeId) };
   }
 
   shouldRewrite(parsed) {
@@ -360,29 +398,18 @@ export class ItemStore {
       return true;
     }
 
-    if (Array.isArray(parsed.items)) {
-      return true;
-    }
-
-    if (!parsed.users || typeof parsed.users !== "object" || Array.isArray(parsed.users)) {
-      return this.legacyItems.length > 0;
-    }
-
-    return Object.entries(this.users).some(([userId, userData]) => {
-      const rawItems = parsed.users?.[userId]?.items;
-      return !Array.isArray(rawItems) || JSON.stringify(userData.items) !== JSON.stringify(rawItems);
-    });
+    return (
+      Boolean(parsed.users) ||
+      Boolean(parsed.guilds) ||
+      Array.isArray(parsed.items) ||
+      Array.isArray(parsed.legacyItems) ||
+      JSON.stringify(normalizeScopes(parsed.scopes)) !== JSON.stringify(this.scopes)
+    );
   }
 
   assertLoaded() {
     if (!this.loaded) {
       throw new Error("ItemStore.load() must be called before using the store.");
-    }
-  }
-
-  assertUserId(userId) {
-    if (!userId) {
-      throw new Error("Discord user id is required for user-scoped monitoring items.");
     }
   }
 }

@@ -71,13 +71,13 @@ export class PriceMonitor {
     };
   }
 
-  clearCooldown(userId, itemName) {
+  clearCooldown(scopeId, itemName) {
     if (itemName === undefined) {
-      itemName = userId;
-      userId = "global";
+      itemName = scopeId;
+      scopeId = "global";
     }
 
-    this.lastAlertAtByItem.delete(this.buildCooldownKey(userId, itemName));
+    this.lastAlertAtByItem.delete(this.buildCooldownKey(scopeId, itemName));
   }
 
   setIntervalMs(intervalMs) {
@@ -130,8 +130,8 @@ export class PriceMonitor {
   }
 
   async checkAll() {
-    const users = this.itemStore.getUsers();
-    const itemCount = users.reduce((total, userData) => total + userData.items.length, 0);
+    const scopes = this.itemStore.getScopes();
+    const itemCount = scopes.reduce((total, scopeData) => total + scopeData.items.length, 0);
 
     if (itemCount === 0) {
       this.logger.info("No monitoring items registered.");
@@ -143,27 +143,35 @@ export class PriceMonitor {
       return;
     }
 
-    this.logger.info(`Checking ${itemCount} monitoring item(s) for ${users.length} user(s).`);
-    for (const userData of users) {
-      for (const item of userData.items) {
-        await this.checkItem(userData.userId, item);
+    this.logger.info(`Checking ${itemCount} monitoring item(s) for ${scopes.length} server scope(s).`);
+    for (const scopeData of scopes) {
+      for (const item of scopeData.items) {
+        await this.checkItem(scopeData.scopeId, item);
         await sleep(250);
       }
     }
   }
 
-  async checkItem(userId, item) {
-    const alertDiscountPercent = this.settingsStore.getAlertDiscountPercent(userId, this.defaultAlertDiscountPercent);
+  async checkItem(scopeId, item) {
+    const alertDiscountPercent = this.settingsStore.getAlertDiscountPercent(scopeId, this.defaultAlertDiscountPercent);
     const alertDiscountRate = alertDiscountPercent / 100;
-    const monitoringItem = normalizeMonitoringItem(item);
+    let monitoringItem = normalizeMonitoringItem(item);
     if (!monitoringItem) {
-      this.logger.warn(`Invalid monitoring item skipped. user=${userId}`);
+      this.logger.warn(`Invalid monitoring item skipped. scope=${scopeId}`);
       return null;
     }
 
-    const itemLabel = formatMonitoringItem(monitoringItem);
-
+    let itemLabel = formatMonitoringItem(monitoringItem);
     try {
+      if (!monitoringItem.category || !monitoringItem.listItemName) {
+        monitoringItem = await this.resolveMonitoringItemCategory(scopeId, monitoringItem);
+        itemLabel = formatMonitoringItem(monitoringItem);
+      }
+      if (!monitoringItem.category) {
+        this.logger.warn(`${itemLabel}: auction category is not resolved. Skipping category-safe price check.`);
+        return null;
+      }
+
       const marketData = await this.mabinogiClient.fetchMarketData(monitoringItem);
       if (!marketData.found) {
         this.logger.warn(
@@ -175,13 +183,13 @@ export class PriceMonitor {
       this.logger.info(
         `${itemLabel} -> ${marketData.resolvedItemName}: lowest=${marketData.lowestPrice.toLocaleString("ko-KR")}, next=${marketData.nextPrice.toLocaleString(
           "ko-KR",
-        )}, discount=${formatPercent(marketData.discountRate)}, user=${userId}, threshold=${alertDiscountPercent}%`,
+        )}, discount=${formatPercent(marketData.discountRate)}, scope=${scopeId}, threshold=${alertDiscountPercent}%`,
       );
 
       if (marketData.discountRate >= alertDiscountRate) {
-        await this.sendAlertIfAllowed(userId, marketData, alertDiscountPercent);
+        await this.sendAlertIfAllowed(scopeId, marketData, alertDiscountPercent);
       } else {
-        this.clearCooldown(userId, monitoringItem);
+        this.clearCooldown(scopeId, monitoringItem);
       }
 
       return marketData;
@@ -191,35 +199,61 @@ export class PriceMonitor {
     }
   }
 
-  async sendAlertIfAllowed(userId, marketData, alertDiscountPercent) {
-    const key = this.buildCooldownKey(userId, {
+  async resolveMonitoringItemCategory(scopeId, monitoringItem) {
+    try {
+      const itemCheck = await this.mabinogiClient.findAuctionItem(monitoringItem.itemName);
+      if (!itemCheck.found || !itemCheck.category) {
+        return monitoringItem;
+      }
+
+      const resolvedItem = {
+        itemName: itemCheck.resolvedItemName || monitoringItem.itemName,
+        category: itemCheck.category,
+        listItemName: itemCheck.listItemName,
+        searchTerms: itemCheck.searchTerms?.length > 0 ? itemCheck.searchTerms : monitoringItem.searchTerms,
+      };
+      const result = await this.itemStore.add(scopeId, resolvedItem);
+      if (result.updatedExisting) {
+        this.logger.info(`${monitoringItem.itemName}: auction category resolved as ${itemCheck.category}.`);
+      }
+
+      return normalizeMonitoringItem(resolvedItem) ?? monitoringItem;
+    } catch (error) {
+      this.logger.warn(`${monitoringItem.itemName}: failed to resolve auction category. ${error.message}`);
+      return monitoringItem;
+    }
+  }
+
+  async sendAlertIfAllowed(scopeId, marketData, alertDiscountPercent) {
+    const key = this.buildCooldownKey(scopeId, {
       itemName: marketData.itemName,
       category: marketData.category,
+      listItemName: marketData.listItemName,
       searchTerms: marketData.searchTerms,
     });
     const now = Date.now();
     const lastAlertAt = this.lastAlertAtByItem.get(key) ?? 0;
 
     if (this.cooldownMs > 0 && now - lastAlertAt < this.cooldownMs) {
-      this.logger.info(`${marketData.itemName}: alert skipped by cooldown. user=${userId}`);
+      this.logger.info(`${marketData.itemName}: alert skipped by cooldown. scope=${scopeId}`);
       return;
     }
 
     let channel = null;
     try {
-      channel = await this.resolveChannel(userId);
+      channel = await this.resolveChannel(scopeId);
     } catch (error) {
-      this.logger.warn(`Alert skipped: failed to resolve alert channel. user=${userId}. ${error.message}`);
+      this.logger.warn(`Alert skipped: failed to resolve alert channel. scope=${scopeId}. ${error.message}`);
       return;
     }
 
     if (!channel) {
-      this.logger.warn(`Alert skipped: no alert channel configured for user=${userId}. Use /구마 and press the alert-channel button.`);
+      this.logger.warn(`Alert skipped: no alert channel configured for scope=${scopeId}. Use /구마 and set this channel as the alert channel.`);
       return;
     }
 
     if (!channel?.isTextBased()) {
-      this.logger.warn(`Alert skipped: configured Discord alert channel is not text-based. user=${userId}`);
+      this.logger.warn(`Alert skipped: configured Discord alert channel is not text-based. scope=${scopeId}`);
       return;
     }
 
@@ -232,17 +266,17 @@ export class PriceMonitor {
         { name: "최저 등록가", value: formatGold(marketData.lowestPrice), inline: true },
         { name: "기준가(차순위)", value: formatGold(marketData.nextPrice), inline: true },
         { name: "할인율", value: formatPercent(marketData.discountRate), inline: true },
-        { name: "내 알림 기준", value: `${alertDiscountPercent}% 이상 낮을 때`, inline: false },
+        { name: "서버 알림 기준", value: `${alertDiscountPercent}% 이상 낮을 때`, inline: false },
       )
       .setFooter({ text: "Nexon Open API 경매장 데이터 기준" })
       .setTimestamp(new Date());
 
-    await channel.send({ content: `<@${userId}> 구마가 매물을 찾았습니다: **${marketData.resolvedItemName}**`, embeds: [embed] });
+    await channel.send({ content: `구마가 매물을 찾았습니다: **${marketData.resolvedItemName}**`, embeds: [embed] });
     this.lastAlertAtByItem.set(key, now);
-    this.logger.info(`${marketData.itemName}: alert sent. user=${userId}`);
+    this.logger.info(`${marketData.itemName}: alert sent. scope=${scopeId}`);
   }
 
-  buildCooldownKey(userId, itemName) {
-    return `${userId ?? "global"}:${monitoringItemKey(itemName)}`;
+  buildCooldownKey(scopeId, itemName) {
+    return `${scopeId ?? "global"}:${monitoringItemKey(itemName)}`;
   }
 }

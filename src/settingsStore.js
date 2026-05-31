@@ -3,6 +3,11 @@ import path from "node:path";
 
 const MIN_ALERT_DISCOUNT_PERCENT = 10;
 const MAX_ALERT_DISCOUNT_PERCENT = 100;
+const GLOBAL_SCOPE_ID = "global";
+
+function normalizeScopeId(value) {
+  return String(value ?? "").trim() || GLOBAL_SCOPE_ID;
+}
 
 function normalizeChannelId(value) {
   return String(value ?? "").trim();
@@ -17,70 +22,121 @@ function normalizeAlertDiscountPercent(value) {
   return percent;
 }
 
-function normalizeUsers(rawUsers) {
-  if (!rawUsers || typeof rawUsers !== "object" || Array.isArray(rawUsers)) {
+function normalizeScopeSettings(rawSettings) {
+  if (!rawSettings || typeof rawSettings !== "object" || Array.isArray(rawSettings)) {
     return {};
   }
 
-  const users = {};
-  for (const [userId, rawUserSettings] of Object.entries(rawUsers)) {
-    if (!userId || !rawUserSettings || typeof rawUserSettings !== "object" || Array.isArray(rawUserSettings)) {
-      continue;
-    }
+  const settings = {};
+  const alertChannelId = normalizeChannelId(rawSettings.alertChannelId);
+  const alertDiscountPercent = normalizeAlertDiscountPercent(rawSettings.alertDiscountPercent);
 
-    const userSettings = {};
-    const alertChannelId = normalizeChannelId(rawUserSettings.alertChannelId);
-    const alertDiscountPercent = normalizeAlertDiscountPercent(rawUserSettings.alertDiscountPercent);
-
-    if (alertChannelId) {
-      userSettings.alertChannelId = alertChannelId;
-    }
-
-    if (alertDiscountPercent !== null) {
-      userSettings.alertDiscountPercent = alertDiscountPercent;
-    }
-
-    users[userId] = userSettings;
+  if (alertChannelId) {
+    settings.alertChannelId = alertChannelId;
   }
 
-  return users;
+  if (alertDiscountPercent !== null) {
+    settings.alertDiscountPercent = alertDiscountPercent;
+  }
+
+  return settings;
+}
+
+function normalizeScopes(rawScopes) {
+  if (!rawScopes || typeof rawScopes !== "object" || Array.isArray(rawScopes)) {
+    return {};
+  }
+
+  const scopes = {};
+  for (const [scopeId, rawScopeSettings] of Object.entries(rawScopes)) {
+    const normalizedScopeId = normalizeScopeId(scopeId);
+    const settings = normalizeScopeSettings(rawScopeSettings);
+    scopes[normalizedScopeId] = settings;
+  }
+
+  return scopes;
+}
+
+function mostCommonChannelId(values) {
+  const counts = new Map();
+  for (const value of values.map(normalizeChannelId).filter(Boolean)) {
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+
+  return [...counts.entries()].sort((left, right) => right[1] - left[1])[0]?.[0] ?? "";
+}
+
+function mergeLegacySettings(parsed, initialSettings) {
+  const legacyUsers = parsed?.users && typeof parsed.users === "object" && !Array.isArray(parsed.users) ? parsed.users : {};
+  const userSettings = Object.values(legacyUsers).filter((settings) => settings && typeof settings === "object" && !Array.isArray(settings));
+  const channelId = mostCommonChannelId([parsed?.alertChannelId, initialSettings.alertChannelId, ...userSettings.map((settings) => settings.alertChannelId)]);
+  const percents = [
+    normalizeAlertDiscountPercent(parsed?.alertDiscountPercent),
+    ...userSettings.map((settings) => normalizeAlertDiscountPercent(settings.alertDiscountPercent)),
+  ].filter((percent) => percent !== null);
+
+  return normalizeScopeSettings({
+    alertChannelId: channelId,
+    // Use the most sensitive legacy threshold so merging users does not silently suppress existing alerts.
+    alertDiscountPercent: percents.length > 0 ? Math.min(...percents) : null,
+  });
 }
 
 export class SettingsStore {
   constructor({ filePath, initialSettings = {} }) {
     this.filePath = filePath;
-    this.settings = { ...initialSettings, users: normalizeUsers(initialSettings.users) };
+    this.settings = {
+      checkIntervalMs: initialSettings.checkIntervalMs,
+      scopes: normalizeScopes(initialSettings.scopes),
+    };
+
+    const initialScope = normalizeScopeSettings(initialSettings);
+    if (Object.keys(initialScope).length > 0) {
+      this.settings.scopes[GLOBAL_SCOPE_ID] = initialScope;
+    }
+
     this.loaded = false;
   }
 
   async load() {
     await fs.mkdir(path.dirname(this.filePath), { recursive: true });
 
+    let parsed = {};
     try {
       const raw = await fs.readFile(this.filePath, "utf8");
-      const parsed = JSON.parse(raw);
-      this.settings = {
-        ...this.settings,
-        ...parsed,
-        users: normalizeUsers(parsed.users),
-      };
+      parsed = JSON.parse(raw);
     } catch (error) {
       if (error.code !== "ENOENT") {
         throw error;
       }
     }
 
-    if (!this.settings.users || typeof this.settings.users !== "object" || Array.isArray(this.settings.users)) {
-      this.settings.users = {};
+    const scopes = normalizeScopes(parsed.scopes ?? parsed.guilds);
+    const hasScopedSettings = Object.keys(scopes).length > 0;
+    if (!hasScopedSettings) {
+      const legacySettings = mergeLegacySettings(parsed, this.settings.scopes[GLOBAL_SCOPE_ID] ?? {});
+      if (Object.keys(legacySettings).length > 0) {
+        scopes[GLOBAL_SCOPE_ID] = legacySettings;
+      }
     }
 
+    const checkIntervalMs = Number(parsed.checkIntervalMs ?? this.settings.checkIntervalMs);
+    this.settings = {
+      checkIntervalMs: Number.isFinite(checkIntervalMs) && checkIntervalMs >= 1000 ? checkIntervalMs : this.settings.checkIntervalMs,
+      scopes,
+    };
+
     this.loaded = true;
+
+    if (this.shouldRewrite(parsed)) {
+      await this.save();
+    }
   }
 
-  getAlertChannelId(userId = null) {
+  getAlertChannelId(scopeId = GLOBAL_SCOPE_ID) {
     this.assertLoaded();
-    const userChannelId = userId ? this.settings.users?.[userId]?.alertChannelId : "";
-    return userChannelId || this.settings.alertChannelId || "";
+    const normalizedScopeId = normalizeScopeId(scopeId);
+    return this.settings.scopes?.[normalizedScopeId]?.alertChannelId || this.settings.scopes?.[GLOBAL_SCOPE_ID]?.alertChannelId || "";
   }
 
   getCheckIntervalMs(fallbackMs) {
@@ -89,14 +145,15 @@ export class SettingsStore {
     return Number.isFinite(value) && value >= 1000 ? value : fallbackMs;
   }
 
-  getAlertDiscountPercent(userId, fallbackPercent) {
+  getAlertDiscountPercent(scopeId, fallbackPercent) {
     this.assertLoaded();
-    const userPercent = normalizeAlertDiscountPercent(this.settings.users?.[userId]?.alertDiscountPercent);
-    if (userPercent !== null) {
-      return userPercent;
+    const normalizedScopeId = normalizeScopeId(scopeId);
+    const scopePercent = normalizeAlertDiscountPercent(this.settings.scopes?.[normalizedScopeId]?.alertDiscountPercent);
+    if (scopePercent !== null) {
+      return scopePercent;
     }
 
-    const globalPercent = normalizeAlertDiscountPercent(this.settings.alertDiscountPercent);
+    const globalPercent = normalizeAlertDiscountPercent(this.settings.scopes?.[GLOBAL_SCOPE_ID]?.alertDiscountPercent);
     if (globalPercent !== null) {
       return globalPercent;
     }
@@ -104,18 +161,10 @@ export class SettingsStore {
     return normalizeAlertDiscountPercent(fallbackPercent) ?? MIN_ALERT_DISCOUNT_PERCENT;
   }
 
-  async setAlertChannelId(userId, channelId) {
+  async setAlertChannelId(scopeId, channelId) {
     this.assertLoaded();
-    const normalizedChannelId = normalizeChannelId(channelId);
-
-    if (!userId) {
-      this.settings.alertChannelId = normalizedChannelId;
-      await this.save();
-      return;
-    }
-
-    this.ensureUserSettings(userId);
-    this.settings.users[userId].alertChannelId = normalizedChannelId;
+    const scopeSettings = this.ensureScopeSettings(scopeId);
+    scopeSettings.alertChannelId = normalizeChannelId(channelId);
     await this.save();
   }
 
@@ -125,7 +174,7 @@ export class SettingsStore {
     await this.save();
   }
 
-  async setAlertDiscountPercent(userId, percent) {
+  async setAlertDiscountPercent(scopeId, percent) {
     this.assertLoaded();
     const normalizedPercent = normalizeAlertDiscountPercent(percent);
     if (normalizedPercent === null) {
@@ -134,22 +183,15 @@ export class SettingsStore {
       );
     }
 
-    this.ensureUserSettings(userId);
-    this.settings.users[userId].alertDiscountPercent = normalizedPercent;
+    const scopeSettings = this.ensureScopeSettings(scopeId);
+    scopeSettings.alertDiscountPercent = normalizedPercent;
     await this.save();
   }
 
-  async clearAlertChannelId(userId = null) {
+  async clearAlertChannelId(scopeId = GLOBAL_SCOPE_ID) {
     this.assertLoaded();
-
-    if (!userId) {
-      delete this.settings.alertChannelId;
-      await this.save();
-      return;
-    }
-
-    this.ensureUserSettings(userId);
-    delete this.settings.users[userId].alertChannelId;
+    const scopeSettings = this.ensureScopeSettings(scopeId);
+    delete scopeSettings.alertChannelId;
     await this.save();
   }
 
@@ -157,8 +199,8 @@ export class SettingsStore {
     await fs.mkdir(path.dirname(this.filePath), { recursive: true });
     const payload = JSON.stringify(
       {
-        ...this.settings,
-        users: this.settings.users ?? {},
+        checkIntervalMs: this.settings.checkIntervalMs,
+        scopes: this.settings.scopes ?? {},
         updatedAt: new Date().toISOString(),
       },
       null,
@@ -169,18 +211,41 @@ export class SettingsStore {
     await fs.rename(tempPath, this.filePath);
   }
 
-  ensureUserSettings(userId) {
-    if (!userId) {
-      throw new Error("Discord user id is required for user-scoped settings.");
+  ensureScopeSettings(scopeId) {
+    const normalizedScopeId = normalizeScopeId(scopeId);
+    if (!this.settings.scopes) {
+      this.settings.scopes = {};
     }
 
-    if (!this.settings.users) {
-      this.settings.users = {};
+    if (
+      normalizedScopeId !== GLOBAL_SCOPE_ID &&
+      !this.settings.scopes[normalizedScopeId] &&
+      this.settings.scopes[GLOBAL_SCOPE_ID] &&
+      Object.keys(this.settings.scopes).length === 1
+    ) {
+      this.settings.scopes[normalizedScopeId] = { ...this.settings.scopes[GLOBAL_SCOPE_ID] };
+      delete this.settings.scopes[GLOBAL_SCOPE_ID];
     }
 
-    if (!this.settings.users[userId]) {
-      this.settings.users[userId] = {};
+    if (!this.settings.scopes[normalizedScopeId]) {
+      this.settings.scopes[normalizedScopeId] = {};
     }
+
+    return this.settings.scopes[normalizedScopeId];
+  }
+
+  shouldRewrite(parsed) {
+    if (!parsed || typeof parsed !== "object") {
+      return true;
+    }
+
+    return (
+      Boolean(parsed.users) ||
+      Boolean(parsed.guilds) ||
+      Boolean(parsed.alertChannelId) ||
+      Boolean(parsed.alertDiscountPercent) ||
+      JSON.stringify(normalizeScopes(parsed.scopes)) !== JSON.stringify(this.settings.scopes ?? {})
+    );
   }
 
   assertLoaded() {

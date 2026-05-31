@@ -83,5 +83,9 @@ export function getConfig({ requireClientId = false } = {}) {
       "MABINOGI_AUCTION_ENDPOINT",
       "https://open.api.nexon.com/mabinogi/v1/auction/keyword-search",
     ),
+    nexonAuctionListEndpoint: readString(
+      "MABINOGI_AUCTION_LIST_ENDPOINT",
+      "https://open.api.nexon.com/mabinogi/v1/auction/list",
+    ),
   };
 }

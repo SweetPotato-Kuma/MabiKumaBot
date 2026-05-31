@@ -23,11 +23,12 @@ async function main() {
   const mabinogiClient = new MabinogiClient({
     apiKey: config.mabinogiApiKey,
     endpoint: config.nexonApiEndpoint,
+    listEndpoint: config.nexonAuctionListEndpoint,
     timeoutMs: config.requestTimeoutMs,
   });
 
-  const resolveAlertChannel = async (userId) => {
-    const alertChannelId = settingsStore.getAlertChannelId(userId);
+  const resolveAlertChannel = async (scopeId) => {
+    const alertChannelId = settingsStore.getAlertChannelId(scopeId);
     if (!alertChannelId) {
       return null;
     }

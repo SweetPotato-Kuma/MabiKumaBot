@@ -128,6 +128,7 @@ function createWizardState(userId, mode) {
     mode,
     itemName: "",
     itemCategory: "",
+    itemListName: "",
     itemSearchTerms: [],
     itemCandidates: [],
     createdAt: Date.now(),
@@ -165,6 +166,7 @@ function normalizeItemCandidates(candidates) {
     result.push({
       itemName,
       category: normalizeItemName(candidate?.category),
+      listItemName: normalizeItemName(candidate?.listItemName),
       searchTerms: Array.isArray(candidate?.searchTerms) ? candidate.searchTerms.map(normalizeItemName).filter(Boolean) : [itemName],
       pricePerUnit: Number.isFinite(candidate.pricePerUnit) ? candidate.pricePerUnit : null,
     });
@@ -187,6 +189,7 @@ async function updateWizardItemCandidates(state, context) {
 function applyCandidateToWizardState(state, candidate) {
   state.itemName = candidate.itemName;
   state.itemCategory = candidate.category ?? "";
+  state.itemListName = candidate.listItemName ?? "";
   state.itemSearchTerms = Array.isArray(candidate.searchTerms) ? candidate.searchTerms : [candidate.itemName];
 }
 
@@ -236,24 +239,24 @@ function getDefaultAlertDiscountPercent(config) {
 }
 
 function getAlertDiscountPercent(context) {
-  return context.settingsStore.getAlertDiscountPercent(context.userId, getDefaultAlertDiscountPercent(context.config));
+  return context.settingsStore.getAlertDiscountPercent(context.scopeId, getDefaultAlertDiscountPercent(context.config));
 }
 
 function buildMainPanel(context) {
-  const { itemStore, settingsStore, mabinogiClient, userId } = context;
-  const alertChannelId = settingsStore.getAlertChannelId(userId);
+  const { itemStore, settingsStore, mabinogiClient, scopeId } = context;
+  const alertChannelId = settingsStore.getAlertChannelId(scopeId);
   const alertDiscountPercent = getAlertDiscountPercent(context);
-  const items = itemStore.getAll(userId);
+  const items = itemStore.getAll(scopeId);
   const checkIntervalSeconds = Math.round(context.monitor.intervalMs / 1000);
 
   const embed = new EmbedBuilder()
     .setTitle("마비노기 구마봇")
-    .setDescription("아래 버튼으로 내 아이템, 가격 확인, 알림 설정을 관리할 수 있습니다.")
+    .setDescription("아래 버튼으로 이 서버의 아이템, 가격 확인, 알림 설정을 관리할 수 있습니다.")
     .setColor(0x4c6ef5)
     .addFields(
-      { name: "내 모니터링 아이템", value: items.length > 0 ? `${items.length}개 등록됨` : "아직 등록된 아이템이 없습니다.", inline: true },
-      { name: "내 알림 채널", value: alertChannelId ? `<#${alertChannelId}>` : "미설정", inline: true },
-      { name: "내 알림 기준", value: `${alertDiscountPercent}% 이상 낮을 때`, inline: true },
+      { name: "서버 모니터링 아이템", value: items.length > 0 ? `${items.length}개 등록됨` : "아직 등록된 아이템이 없습니다.", inline: true },
+      { name: "서버 알림 채널", value: alertChannelId ? `<#${alertChannelId}>` : "미설정", inline: true },
+      { name: "서버 알림 기준", value: `${alertDiscountPercent}% 이상 낮을 때`, inline: true },
       { name: "체크 간격", value: `${checkIntervalSeconds}초`, inline: true },
       { name: "API 키", value: mabinogiClient.hasApiKey() ? "설정됨" : "미설정", inline: true },
     );
@@ -345,7 +348,7 @@ function buildWizardPanel(state, notice = "") {
 }
 
 function buildListPanel(context, page = 0, notice = "") {
-  const entries = context.itemStore.getEntries(context.userId);
+  const entries = context.itemStore.getEntries(context.scopeId);
   const items = entries.map(formatMonitoringItem);
   const totalPages = Math.max(1, Math.ceil(items.length / ITEMS_PER_PAGE));
   const currentPage = clampPage(page, totalPages);
@@ -358,7 +361,7 @@ function buildListPanel(context, page = 0, notice = "") {
       : "등록된 아이템이 없습니다.";
 
   const embed = new EmbedBuilder()
-    .setTitle("내 목록/삭제")
+    .setTitle("서버 목록/삭제")
     .setDescription(description)
     .setColor(0x4c6ef5)
     .setFooter({ text: `${items.length}개 등록됨 · ${currentPage + 1}/${totalPages} 페이지` });
@@ -470,25 +473,25 @@ function buildMarketEmbed(marketData, alertDiscountPercent) {
       { name: "최저 등록가", value: formatGold(marketData.lowestPrice), inline: true },
       { name: "기준가(차순위)", value: formatGold(marketData.nextPrice), inline: true },
       { name: "할인율", value: formatPercent(marketData.discountRate), inline: true },
-      { name: "내 알림 기준", value: `기준가 대비 ${alertDiscountPercent}% 이상 낮음`, inline: false },
+      { name: "서버 알림 기준", value: `기준가 대비 ${alertDiscountPercent}% 이상 낮음`, inline: false },
     )
     .setFooter({ text: `검색 결과 ${marketData.matchingCount}개 중 최저 2개 기준` })
     .setTimestamp(new Date());
 }
 
 function buildStatusText(context) {
-  const { itemStore, settingsStore, mabinogiClient, monitor, userId } = context;
+  const { itemStore, settingsStore, mabinogiClient, monitor, scopeId } = context;
   const status = monitor.getStatus();
-  const alertChannelId = settingsStore.getAlertChannelId(userId);
+  const alertChannelId = settingsStore.getAlertChannelId(scopeId);
   const alertDiscountPercent = getAlertDiscountPercent(context);
 
   return [
     `상태: ${status.running ? "실행 중" : "중지됨"}`,
-    `내 아이템: ${itemStore.getAll(userId).length}`,
-    `내 알림 채널: ${alertChannelId ? `<#${alertChannelId}>` : "미설정"}`,
+    `서버 아이템: ${itemStore.getAll(scopeId).length}`,
+    `서버 알림 채널: ${alertChannelId ? `<#${alertChannelId}>` : "미설정"}`,
     `마비노기 API 키: ${mabinogiClient.hasApiKey() ? "설정됨" : "미설정"}`,
     `체크 간격: ${Math.round(monitor.intervalMs / 1000)}초`,
-    `내 알림 기준: 기준가 대비 ${alertDiscountPercent}% 이상 낮을 때`,
+    `서버 알림 기준: 기준가 대비 ${alertDiscountPercent}% 이상 낮을 때`,
     `마지막 체크: ${formatDateTime(status.lastRunAt)}`,
     `다음 체크: ${formatDateTime(status.nextRunAt)}`,
     `마지막 오류: ${status.lastError ?? "없음"}`,
@@ -507,12 +510,13 @@ function formatItemValidationFailure(itemName, itemCheck) {
 
 function normalizeWizardCriteria(criteria) {
   if (typeof criteria === "string") {
-    return { itemName: normalizeItemName(criteria), category: "", searchTerms: [] };
+    return { itemName: normalizeItemName(criteria), category: "", listItemName: "", searchTerms: [] };
   }
 
   return {
     itemName: normalizeItemName(criteria?.itemName),
     category: normalizeItemName(criteria?.category),
+    listItemName: normalizeItemName(criteria?.listItemName),
     searchTerms: Array.isArray(criteria?.searchTerms) ? criteria.searchTerms.map(normalizeItemName).filter(Boolean) : [],
   };
 }
@@ -532,6 +536,7 @@ async function runMarketSearch(interaction, context, rawCriteria) {
     ? {
         itemName: itemCheck.resolvedItemName,
         category: inputCriteria.category || itemCheck.category,
+        listItemName: inputCriteria.listItemName || itemCheck.listItemName,
         searchTerms: inputCriteria.searchTerms.length > 0 ? inputCriteria.searchTerms : itemCheck.searchTerms,
       }
     : itemName;
@@ -554,7 +559,7 @@ async function runMarketSearch(interaction, context, rawCriteria) {
 }
 
 async function addMonitoringItem(interaction, context, rawCriteria) {
-  const { itemStore, mabinogiClient, monitor, userId } = context;
+  const { itemStore, mabinogiClient, monitor, scopeId } = context;
   const inputCriteria = normalizeWizardCriteria(rawCriteria);
   const normalizedInput = inputCriteria.itemName;
 
@@ -582,23 +587,24 @@ async function addMonitoringItem(interaction, context, rawCriteria) {
   const monitoringItem = {
     itemName: resolvedItemName,
     category: inputCriteria.category || itemCheck.category,
+    listItemName: inputCriteria.listItemName || itemCheck.listItemName,
     searchTerms: inputCriteria.searchTerms.length > 0 ? inputCriteria.searchTerms : itemCheck.searchTerms,
   };
-  const result = await itemStore.add(userId, monitoringItem);
+  const result = await itemStore.add(scopeId, monitoringItem);
 
   if (!result.added) {
     const suffix = result.updatedExisting ? "\n기존 목록 표기를 더 정확한 이름으로 정리했습니다." : "";
-    await interaction.editReply(`이미 내 모니터링 목록에 있습니다: ${result.existingItem ?? formatMonitoringItem(monitoringItem)}${suffix}`);
+    await interaction.editReply(`이미 서버 모니터링 목록에 있습니다: ${result.existingItem ?? formatMonitoringItem(monitoringItem)}${suffix}`);
     return false;
   }
 
-  monitor.clearCooldown(userId, monitoringItem);
+  monitor.clearCooldown(scopeId, monitoringItem);
   const resolvedNote = resolvedItemName !== normalizedInput ? `\n입력값: ${normalizedInput}\n매칭명: ${resolvedItemName}` : "";
   const scopeNote = monitoringItem.category ? `\n자동 분류: ${monitoringItem.category}` : "";
   const termsNote =
     monitoringItem.searchTerms?.length > 1 ? `\n검색 범위: ${monitoringItem.searchTerms.slice(0, 4).join(", ")}` : "";
   await interaction.editReply(
-    `추가 완료: ${formatMonitoringItem(monitoringItem)}${resolvedNote}${scopeNote}${termsNote}\n\n내 현재 목록:\n${formatItemListForReply(result.items)}`,
+    `추가 완료: ${formatMonitoringItem(monitoringItem)}${resolvedNote}${scopeNote}${termsNote}\n\n서버 현재 목록:\n${formatItemListForReply(result.items)}`,
   );
   return true;
 }
@@ -613,6 +619,7 @@ async function runWizard(interaction, context, state) {
   const criteria = {
     itemName,
     category: state.itemCategory,
+    listItemName: state.itemListName,
     searchTerms: state.itemSearchTerms,
   };
   const completed =
@@ -693,16 +700,16 @@ async function handleButton(interaction, context) {
 
   if (interaction.customId.startsWith(`${CUSTOM_ID.listDeletePrefix}:`)) {
     const { page, index } = parseListDeleteCustomId(interaction.customId);
-    const itemName = context.itemStore.getEntries(context.userId)[index];
+    const itemName = context.itemStore.getEntries(context.scopeId)[index];
 
     if (!itemName) {
       await interaction.update(buildListPanel(context, page, "삭제할 항목을 찾지 못했습니다. 목록을 다시 열어 주세요."));
       return;
     }
 
-    const result = await context.itemStore.removeMany(context.userId, [itemName]);
+    const result = await context.itemStore.removeMany(context.scopeId, [itemName]);
     for (const removedItem of result.removedItems) {
-      context.monitor.clearCooldown(context.userId, removedItem);
+      context.monitor.clearCooldown(context.scopeId, removedItem);
     }
 
     const totalPages = Math.max(1, Math.ceil(result.items.length / ITEMS_PER_PAGE));
@@ -741,7 +748,7 @@ async function handleStringSelectMenu(interaction, context) {
 }
 
 async function handleSettingsModalSubmit(interaction, context) {
-  const { settingsStore, monitor, userId } = context;
+  const { settingsStore, monitor, scopeId } = context;
   const rawUseCurrentChannel = interaction.fields.getTextInputValue(USE_CURRENT_CHANNEL_INPUT_ID).trim().toUpperCase();
   const rawPercent = interaction.fields.getTextInputValue(ALERT_DISCOUNT_INPUT_ID).trim();
   const rawSeconds = interaction.fields.getTextInputValue(INTERVAL_INPUT_ID).trim();
@@ -779,11 +786,11 @@ async function handleSettingsModalSubmit(interaction, context) {
       return;
     }
 
-    await settingsStore.setAlertChannelId(userId, interaction.channelId);
+    await settingsStore.setAlertChannelId(scopeId, interaction.channelId);
     updates.push(`알림 채널: <#${interaction.channelId}>`);
   }
 
-  await settingsStore.setAlertDiscountPercent(userId, alertDiscountPercent);
+  await settingsStore.setAlertDiscountPercent(scopeId, alertDiscountPercent);
   updates.push(`알림 기준: ${alertDiscountPercent}% 이상 낮을 때`);
 
   const intervalMs = intervalSeconds * 1000;
@@ -810,6 +817,7 @@ async function handleModalSubmit(interaction, context) {
 
     state.itemName = normalizeItemName(interaction.fields.getTextInputValue(ITEM_INPUT_ID));
     state.itemCategory = "";
+    state.itemListName = "";
     state.itemSearchTerms = [];
     await updateWizardItemCandidates(state, context);
     const exactCandidate = exactCandidateForItemName(state);
@@ -833,11 +841,10 @@ async function handleModalSubmit(interaction, context) {
 
 export async function handleInteraction(interaction, context) {
   const userId = interaction.user?.id;
-  const scopedContext = { ...context, userId };
+  const scopeId = interaction.guildId ?? "global";
+  const scopedContext = { ...context, userId, scopeId };
 
-  if (userId) {
-    await context.itemStore.ensureUser(userId);
-  }
+  await context.itemStore.ensureScope(scopeId);
 
   if (interaction.isChatInputCommand()) {
     await handleChatInputCommand(interaction, scopedContext);

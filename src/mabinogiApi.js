@@ -157,6 +157,7 @@ function normalizeMarketCriteria(criteria) {
   const itemName = typeof criteria === "string" ? criteria : criteria?.itemName;
   const normalizedItemName = String(itemName ?? "").trim().replace(/\s+/g, " ");
   const category = typeof criteria === "string" ? "" : String(criteria?.category ?? "").trim();
+  const listItemName = typeof criteria === "string" ? "" : String(criteria?.listItemName ?? "").trim().replace(/\s+/g, " ");
   const searchTerms =
     typeof criteria === "string"
       ? uniqueSearchTerms([normalizedItemName])
@@ -165,6 +166,7 @@ function normalizeMarketCriteria(criteria) {
   return {
     itemName: normalizedItemName,
     category,
+    listItemName,
     searchTerms,
   };
 }
@@ -211,9 +213,10 @@ function sortAuctionItemMatches(itemName) {
 }
 
 export class MabinogiClient {
-  constructor({ apiKey, endpoint, timeoutMs }) {
+  constructor({ apiKey, endpoint, listEndpoint, timeoutMs }) {
     this.apiKey = apiKey;
     this.endpoint = endpoint;
+    this.listEndpoint = listEndpoint ?? "https://open.api.nexon.com/mabinogi/v1/auction/list";
     this.timeoutMs = timeoutMs;
     this.resolvedKeywordCache = new Map();
   }
@@ -296,6 +299,72 @@ export class MabinogiClient {
     return items;
   }
 
+  async fetchAuctionListPage({ category, itemName, cursor = "", timeoutMs = this.timeoutMs } = {}) {
+    const url = new URL(this.listEndpoint);
+    if (category) {
+      url.searchParams.set("auction_item_category", category);
+    }
+    if (itemName) {
+      url.searchParams.set("item_name", itemName);
+    }
+    if (cursor) {
+      url.searchParams.set("cursor", cursor);
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+    let response;
+    try {
+      response = await fetch(url, {
+        headers: {
+          accept: "application/json",
+          "x-nxopen-api-key": this.apiKey,
+        },
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (error.name === "AbortError") {
+        throw new MabinogiApiError(`Nexon API 요청 시간이 초과되었습니다. item_name=${itemName}, category=${category}`);
+      }
+      throw new MabinogiApiError(`Nexon API 요청에 실패했습니다. item_name=${itemName}, category=${category}: ${error.message}`);
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new MabinogiApiError(`Nexon API 응답 오류: ${response.status}`, {
+        status: response.status,
+        body,
+      });
+    }
+
+    const data = await response.json();
+    return {
+      items: Array.isArray(data.auction_item) ? data.auction_item : [],
+      nextCursor: typeof data.next_cursor === "string" && data.next_cursor ? data.next_cursor : null,
+    };
+  }
+
+  async fetchAuctionListItems({ category, itemName, maxPages = 1, timeoutMs = this.timeoutMs } = {}) {
+    const items = [];
+    let cursor = "";
+
+    for (let page = 0; page < maxPages; page += 1) {
+      const result = await this.fetchAuctionListPage({ category, itemName, cursor, timeoutMs });
+      items.push(...result.items);
+
+      if (!result.nextCursor) {
+        break;
+      }
+
+      cursor = result.nextCursor;
+    }
+
+    return items;
+  }
+
   async suggestAuctionItems(keyword, { limit = 25, timeoutMs = 1800 } = {}) {
     if (!this.hasApiKey()) {
       return [];
@@ -327,6 +396,7 @@ export class MabinogiClient {
         return {
           itemName,
           category: auctionItem.category,
+          listItemName: auctionItem.itemName,
           searchTerms: buildSearchTerms(keyword, itemName, auctionItem),
           pricePerUnit: auctionItem.pricePerUnit,
         };
@@ -379,6 +449,7 @@ export class MabinogiClient {
       itemName,
       resolvedItemName,
       category: firstItem?.category ?? "",
+      listItemName: firstItem?.itemName ?? "",
       searchTerms: buildSearchTerms(itemName, resolvedItemName, firstItem),
       searchKeywords: searchedKeywords,
       rawCount: dedupeAuctionItems(allAuctionItems).length,
@@ -393,6 +464,78 @@ export class MabinogiClient {
     }
 
     const marketCriteria = normalizeMarketCriteria(criteria);
+    if (marketCriteria.category) {
+      const listItemName = marketCriteria.listItemName || marketCriteria.itemName;
+      const normalizedTargets = marketCriteria.searchTerms.map(compactSearchText).filter(Boolean);
+      const auctionItems = [];
+      let matchingItems = [];
+      let cursor = "";
+
+      for (let page = 0; page < 10; page += 1) {
+        const result = await this.fetchAuctionListPage({
+          category: marketCriteria.category,
+          itemName: listItemName,
+          cursor,
+        });
+        auctionItems.push(...result.items);
+
+        matchingItems = dedupeAuctionItems(auctionItems)
+          .map(mapAuctionItem)
+          .filter(
+            (auctionItem) =>
+              auctionItem.pricePerUnit !== null &&
+              (normalizedTargets.length === 0 ||
+                normalizedTargets.some(
+                  (target) =>
+                    compactSearchText(auctionItem.displayName).includes(target) ||
+                    compactSearchText(auctionItem.itemName).includes(target),
+                )),
+          )
+          .sort((a, b) => a.pricePerUnit - b.pricePerUnit);
+
+        if (matchingItems.length >= 2 || !result.nextCursor) {
+          break;
+        }
+
+        cursor = result.nextCursor;
+      }
+      const resolvedItemName = matchingItems[0]?.displayName ?? marketCriteria.itemName;
+
+      if (matchingItems.length < 2) {
+        return {
+          found: false,
+          itemName: marketCriteria.itemName,
+          resolvedItemName,
+          category: marketCriteria.category,
+          listItemName,
+          searchTerms: marketCriteria.searchTerms,
+          searchKeywords: [`${marketCriteria.category}/${listItemName}`],
+          rawCount: dedupeAuctionItems(auctionItems).length,
+          matchingCount: matchingItems.length,
+        };
+      }
+
+      const [lowestItem, nextItem] = matchingItems;
+      const discountRate = 1 - lowestItem.pricePerUnit / nextItem.pricePerUnit;
+
+      return {
+        found: true,
+        itemName: marketCriteria.itemName,
+        resolvedItemName,
+        category: marketCriteria.category,
+        listItemName,
+        searchTerms: marketCriteria.searchTerms,
+        searchKeywords: [`${marketCriteria.category}/${listItemName}`],
+        rawCount: dedupeAuctionItems(auctionItems).length,
+        matchingCount: matchingItems.length,
+        lowestPrice: lowestItem.pricePerUnit,
+        nextPrice: nextItem.pricePerUnit,
+        discountRate,
+        lowestItem,
+        nextItem,
+      };
+    }
+
     const normalizedTargets = marketCriteria.searchTerms.map(compactSearchText).filter(Boolean);
     const cacheKey = normalizedTargets.join("|") || compactSearchText(marketCriteria.itemName);
     const cachedKeyword = this.resolvedKeywordCache.get(cacheKey);
