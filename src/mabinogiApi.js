@@ -412,7 +412,7 @@ export class MabinogiClient {
       .slice(0, limit);
   }
 
-  async findAuctionItem(itemName, { maxPages = 2 } = {}) {
+  async findAuctionItem(itemName, { maxPages = 2, timeoutMs = this.timeoutMs } = {}) {
     if (!this.hasApiKey()) {
       throw new MabinogiApiError("API_KEY 또는 MABINOGI_API_KEY가 설정되지 않았습니다.");
     }
@@ -424,7 +424,7 @@ export class MabinogiClient {
 
     for (const keyword of buildKeywordCandidates(itemName)) {
       searchedKeywords.push(keyword);
-      const auctionItems = await this.fetchAuctionItems(keyword, { maxPages });
+      const auctionItems = await this.fetchAuctionItems(keyword, { maxPages, timeoutMs });
       allAuctionItems.push(...auctionItems);
 
       matchingItems = dedupeAuctionItems(allAuctionItems)

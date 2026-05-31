@@ -131,6 +131,8 @@ function createWizardState(userId, mode) {
     itemListName: "",
     itemSearchTerms: [],
     itemCandidates: [],
+    itemVerified: false,
+    itemValidationError: "",
     createdAt: Date.now(),
   };
   wizardStates.set(stateId, state);
@@ -186,16 +188,83 @@ async function updateWizardItemCandidates(state, context) {
   return state.itemCandidates;
 }
 
+function resetWizardItemValidation(state) {
+  state.itemCategory = "";
+  state.itemListName = "";
+  state.itemSearchTerms = [];
+  state.itemCandidates = [];
+  state.itemVerified = false;
+  state.itemValidationError = "";
+}
+
 function applyCandidateToWizardState(state, candidate) {
   state.itemName = candidate.itemName;
   state.itemCategory = candidate.category ?? "";
   state.itemListName = candidate.listItemName ?? "";
   state.itemSearchTerms = Array.isArray(candidate.searchTerms) ? candidate.searchTerms : [candidate.itemName];
+  state.itemVerified = true;
+  state.itemValidationError = "";
+}
+
+function applyItemCheckToWizardState(state, itemCheck) {
+  const resolvedItemName = normalizeItemName(itemCheck?.resolvedItemName) || state.itemName;
+  state.itemName = resolvedItemName;
+  state.itemCategory = normalizeItemName(itemCheck?.category);
+  state.itemListName = normalizeItemName(itemCheck?.listItemName);
+  state.itemSearchTerms =
+    Array.isArray(itemCheck?.searchTerms) && itemCheck.searchTerms.length > 0
+      ? itemCheck.searchTerms.map(normalizeItemName).filter(Boolean)
+      : [resolvedItemName].filter(Boolean);
+  state.itemVerified = true;
+  state.itemValidationError = "";
 }
 
 function exactCandidateForItemName(state) {
   const compactName = compactUiText(state.itemName);
   return state.itemCandidates.find((candidate) => compactUiText(candidate.itemName) === compactName) ?? null;
+}
+
+async function validateWizardItemName(state, context, { timeoutMs = 1800 } = {}) {
+  if (!state.itemName) {
+    return null;
+  }
+
+  if (!context.mabinogiClient.hasApiKey()) {
+    state.itemValidationError = "아이템명 검증을 하려면 `.env`에 `API_KEY` 또는 `MABINOGI_API_KEY`를 추가해야 합니다.";
+    return null;
+  }
+
+  const itemCheck = await context.mabinogiClient
+    .findAuctionItem(state.itemName, { maxPages: 1, timeoutMs })
+    .catch((error) => ({ error }));
+  if (itemCheck.error) {
+    state.itemValidationError = `아이템 검증 중 오류가 발생했습니다: ${itemCheck.error.message}`;
+    return null;
+  }
+
+  if (!itemCheck.found) {
+    state.itemValidationError = formatItemValidationFailure(state.itemName, itemCheck);
+    return null;
+  }
+
+  applyItemCheckToWizardState(state, itemCheck);
+  return itemCheck;
+}
+
+function getWizardValidationLabel(state) {
+  if (state.itemVerified) {
+    return "검증됨";
+  }
+
+  if (state.itemValidationError) {
+    return "실패";
+  }
+
+  if (state.itemCandidates.length > 0) {
+    return "경매장 후보 확인됨";
+  }
+
+  return "미확인";
 }
 
 function candidateOptionDescription(candidate) {
@@ -211,6 +280,11 @@ function candidateOptionDescription(candidate) {
 }
 
 async function respondToWizardModal(interaction, panel) {
+  if (interaction.deferred || interaction.replied) {
+    await interaction.editReply(panel);
+    return;
+  }
+
   if (interaction.isFromMessage()) {
     await interaction.update(panel);
     return;
@@ -300,8 +374,9 @@ function buildWizardPanel(state, notice = "") {
     .setDescription(notice || "아이템명을 입력하면 경매장 매물 존재 여부를 확인합니다.")
     .addFields(
       { name: "아이템명", value: state.itemName || "미입력", inline: true },
-      { name: "검증", value: state.itemCandidates.length > 0 ? "경매장 후보 확인됨" : "미확인", inline: true },
+      { name: "검증", value: getWizardValidationLabel(state), inline: true },
       ...(state.itemCategory ? [{ name: "자동 분류", value: state.itemCategory, inline: true }] : []),
+      ...(state.itemValidationError ? [{ name: "검증 실패", value: truncateText(state.itemValidationError, 1000) }] : []),
     );
 
   const components = [];
@@ -815,14 +890,25 @@ async function handleModalSubmit(interaction, context) {
       return;
     }
 
+    if (interaction.isFromMessage()) {
+      await interaction.deferUpdate();
+    } else {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    }
+
     state.itemName = normalizeItemName(interaction.fields.getTextInputValue(ITEM_INPUT_ID));
-    state.itemCategory = "";
-    state.itemListName = "";
-    state.itemSearchTerms = [];
+    resetWizardItemValidation(state);
+
     await updateWizardItemCandidates(state, context);
     const exactCandidate = exactCandidateForItemName(state);
     if (exactCandidate) {
       applyCandidateToWizardState(state, exactCandidate);
+      await respondToWizardModal(interaction, buildWizardPanel(state, `경매장 매물을 확인했습니다: ${state.itemName}`));
+      return;
+    }
+
+    const itemCheck = await validateWizardItemName(state, context);
+    if (itemCheck) {
       await respondToWizardModal(interaction, buildWizardPanel(state, `경매장 매물을 확인했습니다: ${state.itemName}`));
       return;
     }
@@ -833,7 +919,7 @@ async function handleModalSubmit(interaction, context) {
         state,
         state.itemCandidates.length > 0
           ? "비슷한 경매장 매물을 찾았습니다. 아래 후보에서 선택하거나 그대로 진행할 수 있습니다."
-          : "아이템명을 저장했습니다. 실행 시 경매장 매물 존재 여부를 검증합니다.",
+          : "아이템명을 검증하지 못했습니다. 이름을 다시 확인해 주세요.",
       ),
     );
   }
