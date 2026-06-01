@@ -325,7 +325,12 @@ function drawLottoCombinations(count = 5) {
 }
 
 function formatLottoCombinations(combinations) {
-  return combinations.map((numbers, index) => `${index + 1} ${numbers.join(" ")}`).join("\n");
+  return combinations
+    .map((numbers, index) => {
+      const paddedNumbers = numbers.map((number) => `\`${String(number).padStart(2, "0")}\``).join("  ");
+      return `**[${index + 1}]**  ${paddedNumbers}`;
+    })
+    .join("\n");
 }
 
 function getDefaultAlertDiscountPercent(config) {
@@ -372,16 +377,15 @@ function buildMainPanel(context) {
 }
 
 function buildLotteryPanel(resultText = "") {
-  const embed = new EmbedBuilder()
-    .setTitle("추첨")
-    .setDescription(resultText ? `\`\`\`\n${resultText}\n\`\`\`` : "로또 버튼을 누르면 번호 조합 5개를 추첨합니다.")
-    .setColor(0x4c6ef5);
-
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(CUSTOM_ID.lottoButton).setLabel("로또").setStyle(ButtonStyle.Primary),
   );
 
-  return { embeds: [embed], components: [row] };
+  return {
+    content: resultText ? `**로또 추첨 결과**\n${resultText}` : "**로또 추첨**\n로또 버튼을 누르면 번호 조합 5개를 추첨합니다.",
+    embeds: [],
+    components: [row],
+  };
 }
 
 function buildWizardItemNameModal(state) {
