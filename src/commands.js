@@ -1,3 +1,5 @@
+import { randomInt } from "node:crypto";
+
 import {
   ActionRowBuilder,
   ButtonBuilder,
@@ -44,6 +46,7 @@ const CUSTOM_ID = {
   listLabelPrefix: "guma:list-label",
   listDeletePrefix: "guma:list-delete",
   settingsModal: "guma:settings-modal",
+  lottoButton: "draw:lotto",
 };
 
 const OLD_SETTINGS_BUTTON_IDS = new Set([
@@ -58,6 +61,7 @@ const wizardStates = new Map();
 
 export const commandBuilders = [
   new SlashCommandBuilder().setName("구마").setDescription("마비노기 경매장 모니터링을 관리합니다."),
+  new SlashCommandBuilder().setName("추첨").setDescription("로또 번호를 추첨합니다."),
 ];
 
 export const applicationCommands = commandBuilders.map((command) => command.toJSON());
@@ -305,6 +309,25 @@ function formatItemListForReply(items) {
   return truncateText(formatItemList(items), 1700);
 }
 
+function drawLottoCombination() {
+  const numbers = Array.from({ length: 45 }, (_, index) => index + 1);
+
+  for (let index = 0; index < 6; index += 1) {
+    const randomIndex = randomInt(index, numbers.length);
+    [numbers[index], numbers[randomIndex]] = [numbers[randomIndex], numbers[index]];
+  }
+
+  return numbers.slice(0, 6).sort((left, right) => left - right);
+}
+
+function drawLottoCombinations(count = 5) {
+  return Array.from({ length: count }, () => drawLottoCombination());
+}
+
+function formatLottoCombinations(combinations) {
+  return combinations.map((numbers, index) => `${index + 1} ${numbers.join(" ")}`).join("\n");
+}
+
 function getDefaultAlertDiscountPercent(config) {
   const percent = Math.round(Number(config.alertDiscountThreshold) * 100);
   return Number.isInteger(percent) && percent >= MIN_ALERT_DISCOUNT_PERCENT && percent <= MAX_ALERT_DISCOUNT_PERCENT
@@ -346,6 +369,19 @@ function buildMainPanel(context) {
   );
 
   return { embeds: [embed], components: [firstRow, secondRow] };
+}
+
+function buildLotteryPanel(resultText = "") {
+  const embed = new EmbedBuilder()
+    .setTitle("추첨")
+    .setDescription(resultText ? `\`\`\`\n${resultText}\n\`\`\`` : "로또 버튼을 누르면 번호 조합 5개를 추첨합니다.")
+    .setColor(0x4c6ef5);
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(CUSTOM_ID.lottoButton).setLabel("로또").setStyle(ButtonStyle.Primary),
+  );
+
+  return { embeds: [embed], components: [row] };
 }
 
 function buildWizardItemNameModal(state) {
@@ -707,14 +743,22 @@ async function runWizard(interaction, context, state) {
 }
 
 async function handleChatInputCommand(interaction, context) {
-  if (interaction.commandName !== "구마") {
+  if (interaction.commandName === "구마") {
+    await interaction.reply(privateReply(buildMainPanel(context)));
     return;
   }
 
-  await interaction.reply(privateReply(buildMainPanel(context)));
+  if (interaction.commandName === "추첨") {
+    await interaction.reply(privateReply(buildLotteryPanel()));
+  }
 }
 
 async function handleButton(interaction, context) {
+  if (interaction.customId === CUSTOM_ID.lottoButton) {
+    await interaction.update(buildLotteryPanel(formatLottoCombinations(drawLottoCombinations())));
+    return;
+  }
+
   if (interaction.customId === CUSTOM_ID.addButton) {
     const state = createWizardState(context.userId, "add");
     await interaction.reply(privateReply(buildWizardPanel(state)));
