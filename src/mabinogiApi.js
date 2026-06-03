@@ -19,6 +19,10 @@ function compactSearchText(value) {
     .replace(/[\s"'`.,/\\|()[\]{}<>:;!?~_\-+*=]+/g, "");
 }
 
+function hasIncompleteMarker(value) {
+  return compactSearchText(value).includes("미완성");
+}
+
 function pushUnique(values, value) {
   const normalized = String(value ?? "").trim();
   if (normalized && !values.includes(normalized)) {
@@ -98,14 +102,22 @@ function dedupeAuctionItems(items) {
 }
 
 function mapAuctionItem(auctionItem) {
+  const itemName = String(auctionItem.item_name ?? "");
+  const displayName = String(auctionItem.item_display_name ?? "");
+
   return {
-    itemName: String(auctionItem.item_name ?? ""),
-    displayName: String(auctionItem.item_display_name ?? ""),
+    itemName,
+    displayName,
     category: String(auctionItem.auction_item_category ?? ""),
     count: Number(auctionItem.item_count ?? 0),
     expireAt: auctionItem.date_auction_expire ?? null,
     pricePerUnit: asPositiveNumber(auctionItem.auction_price_per_unit),
+    isIncomplete: hasIncompleteMarker(itemName) || hasIncompleteMarker(displayName),
   };
+}
+
+function isCompletedAuctionItem(auctionItem) {
+  return !auctionItem.isIncomplete;
 }
 
 function uniqueSearchTerms(values) {
@@ -384,6 +396,7 @@ export class MabinogiClient {
 
     return dedupeAuctionItems(auctionItems)
       .map(mapAuctionItem)
+      .filter(isCompletedAuctionItem)
       .filter(
         (auctionItem) =>
           auctionItem.displayName &&
@@ -429,6 +442,7 @@ export class MabinogiClient {
 
       matchingItems = dedupeAuctionItems(allAuctionItems)
         .map(mapAuctionItem)
+        .filter(isCompletedAuctionItem)
         .filter(
           (auctionItem) =>
             compactSearchText(auctionItem.displayName).includes(normalizedTarget) ||
@@ -481,6 +495,7 @@ export class MabinogiClient {
 
         matchingItems = dedupeAuctionItems(auctionItems)
           .map(mapAuctionItem)
+          .filter(isCompletedAuctionItem)
           .filter(
             (auctionItem) =>
               auctionItem.pricePerUnit !== null &&
@@ -556,6 +571,7 @@ export class MabinogiClient {
 
       matchingItems = dedupeAuctionItems(allAuctionItems)
         .map(mapAuctionItem)
+        .filter(isCompletedAuctionItem)
         .filter(
           (auctionItem) =>
             auctionItem.pricePerUnit !== null &&
