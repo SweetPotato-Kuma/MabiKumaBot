@@ -31,6 +31,26 @@ function pushUnique(values, value) {
 }
 
 const COMMON_ITEM_TAIL_WORDS = [
+  "보우",
+  "소드",
+  "블레이드",
+  "스태프",
+  "원드",
+  "실린더",
+  "너클",
+  "랜스",
+  "도끼",
+  "둔기",
+  "방패",
+  "석궁",
+  "수리검",
+  "핸들",
+  "듀얼건",
+  "아틀라틀",
+  "마도서",
+  "로브",
+  "장갑",
+  "신발",
   "허브",
   "포션",
   "엘릭서",
@@ -51,6 +71,22 @@ const COMMON_ITEM_TAIL_WORDS = [
   "스크롤",
 ];
 
+function pushTailKeywordCandidates(candidates, stem, tailWord) {
+  if (!stem || !tailWord) {
+    return;
+  }
+
+  pushUnique(candidates, `${stem} ${tailWord}`);
+  pushUnique(candidates, `${stem},${tailWord}`);
+
+  for (const length of [2, 3, 4, 5, 6]) {
+    if (stem.length > length) {
+      pushUnique(candidates, `${stem.slice(0, length)},${tailWord}`);
+      pushUnique(candidates, `${stem.slice(-length)},${tailWord}`);
+    }
+  }
+}
+
 function buildKeywordCandidates(itemName) {
   const raw = String(itemName ?? "").trim().replace(/\s+/g, " ");
   const compact = raw.replace(/\s+/g, "");
@@ -58,14 +94,14 @@ function buildKeywordCandidates(itemName) {
 
   pushUnique(candidates, raw);
 
-  if (compact && compact !== raw) {
-    pushUnique(candidates, compact);
-  }
-
   for (const tailWord of COMMON_ITEM_TAIL_WORDS) {
     if (compact.endsWith(tailWord) && compact.length > tailWord.length) {
-      pushUnique(candidates, `${compact.slice(0, -tailWord.length)} ${tailWord}`);
+      pushTailKeywordCandidates(candidates, compact.slice(0, -tailWord.length), tailWord);
     }
+  }
+
+  if (compact && compact !== raw) {
+    pushUnique(candidates, compact);
   }
 
   if (!raw.includes(" ") && compact.length >= 4) {
