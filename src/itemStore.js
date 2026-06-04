@@ -81,11 +81,11 @@ function serializeMonitoringItem(item) {
 
   return {
     itemName: normalized.itemName,
+    includeIncomplete: normalized.includeIncomplete,
     ...(normalized.category ? { category: normalized.category } : {}),
     ...(normalized.listItemName && normalizeItemKey(normalized.listItemName) !== normalizeItemKey(normalized.itemName)
       ? { listItemName: normalized.listItemName }
       : {}),
-    ...(normalized.includeIncomplete ? { includeIncomplete: true } : {}),
     ...(normalized.searchTerms.length > 1 ||
     (normalized.searchTerms.length === 1 && normalizeItemKey(normalized.searchTerms[0]) !== normalizeItemKey(normalized.itemName))
       ? { searchTerms: normalized.searchTerms }
