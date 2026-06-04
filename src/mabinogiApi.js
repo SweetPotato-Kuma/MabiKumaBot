@@ -116,8 +116,8 @@ function mapAuctionItem(auctionItem) {
   };
 }
 
-function isCompletedAuctionItem(auctionItem) {
-  return !auctionItem.isIncomplete;
+function matchesIncompletePreference(auctionItem, includeIncomplete) {
+  return includeIncomplete || !auctionItem.isIncomplete;
 }
 
 function uniqueSearchTerms(values) {
@@ -170,6 +170,7 @@ function normalizeMarketCriteria(criteria) {
   const normalizedItemName = String(itemName ?? "").trim().replace(/\s+/g, " ");
   const category = typeof criteria === "string" ? "" : String(criteria?.category ?? "").trim();
   const listItemName = typeof criteria === "string" ? "" : String(criteria?.listItemName ?? "").trim().replace(/\s+/g, " ");
+  const includeIncomplete = typeof criteria === "string" ? false : Boolean(criteria?.includeIncomplete);
   const searchTerms =
     typeof criteria === "string"
       ? uniqueSearchTerms([normalizedItemName])
@@ -179,6 +180,7 @@ function normalizeMarketCriteria(criteria) {
     itemName: normalizedItemName,
     category,
     listItemName,
+    includeIncomplete,
     searchTerms,
   };
 }
@@ -377,7 +379,7 @@ export class MabinogiClient {
     return items;
   }
 
-  async suggestAuctionItems(keyword, { limit = 25, timeoutMs = 1800 } = {}) {
+  async suggestAuctionItems(keyword, { limit = 25, timeoutMs = 1800, includeIncomplete = false } = {}) {
     if (!this.hasApiKey()) {
       return [];
     }
@@ -396,7 +398,7 @@ export class MabinogiClient {
 
     return dedupeAuctionItems(auctionItems)
       .map(mapAuctionItem)
-      .filter(isCompletedAuctionItem)
+      .filter((auctionItem) => matchesIncompletePreference(auctionItem, includeIncomplete))
       .filter(
         (auctionItem) =>
           auctionItem.displayName &&
@@ -412,6 +414,7 @@ export class MabinogiClient {
           listItemName: auctionItem.itemName,
           searchTerms: buildSearchTerms(keyword, itemName, auctionItem),
           pricePerUnit: auctionItem.pricePerUnit,
+          isIncomplete: auctionItem.isIncomplete,
         };
       })
       .filter((candidate) => {
@@ -425,7 +428,7 @@ export class MabinogiClient {
       .slice(0, limit);
   }
 
-  async findAuctionItem(itemName, { maxPages = 2, timeoutMs = this.timeoutMs } = {}) {
+  async findAuctionItem(itemName, { maxPages = 2, timeoutMs = this.timeoutMs, includeIncomplete = false } = {}) {
     if (!this.hasApiKey()) {
       throw new MabinogiApiError("API_KEY 또는 MABINOGI_API_KEY가 설정되지 않았습니다.");
     }
@@ -442,7 +445,7 @@ export class MabinogiClient {
 
       matchingItems = dedupeAuctionItems(allAuctionItems)
         .map(mapAuctionItem)
-        .filter(isCompletedAuctionItem)
+        .filter((auctionItem) => matchesIncompletePreference(auctionItem, includeIncomplete))
         .filter(
           (auctionItem) =>
             compactSearchText(auctionItem.displayName).includes(normalizedTarget) ||
@@ -464,6 +467,7 @@ export class MabinogiClient {
       resolvedItemName,
       category: firstItem?.category ?? "",
       listItemName: firstItem?.itemName ?? "",
+      includeIncomplete,
       searchTerms: buildSearchTerms(itemName, resolvedItemName, firstItem),
       searchKeywords: searchedKeywords,
       rawCount: dedupeAuctionItems(allAuctionItems).length,
@@ -495,7 +499,7 @@ export class MabinogiClient {
 
         matchingItems = dedupeAuctionItems(auctionItems)
           .map(mapAuctionItem)
-          .filter(isCompletedAuctionItem)
+          .filter((auctionItem) => matchesIncompletePreference(auctionItem, marketCriteria.includeIncomplete))
           .filter(
             (auctionItem) =>
               auctionItem.pricePerUnit !== null &&
@@ -523,6 +527,7 @@ export class MabinogiClient {
           resolvedItemName,
           category: marketCriteria.category,
           listItemName,
+          includeIncomplete: marketCriteria.includeIncomplete,
           searchTerms: marketCriteria.searchTerms,
           searchKeywords: [`${marketCriteria.category}/${listItemName}`],
           rawCount: dedupeAuctionItems(auctionItems).length,
@@ -539,6 +544,7 @@ export class MabinogiClient {
         resolvedItemName,
         category: marketCriteria.category,
         listItemName,
+        includeIncomplete: marketCriteria.includeIncomplete,
         searchTerms: marketCriteria.searchTerms,
         searchKeywords: [`${marketCriteria.category}/${listItemName}`],
         rawCount: dedupeAuctionItems(auctionItems).length,
@@ -571,7 +577,7 @@ export class MabinogiClient {
 
       matchingItems = dedupeAuctionItems(allAuctionItems)
         .map(mapAuctionItem)
-        .filter(isCompletedAuctionItem)
+        .filter((auctionItem) => matchesIncompletePreference(auctionItem, marketCriteria.includeIncomplete))
         .filter(
           (auctionItem) =>
             auctionItem.pricePerUnit !== null &&
@@ -594,6 +600,7 @@ export class MabinogiClient {
         itemName: marketCriteria.itemName,
         resolvedItemName: matchingItems[0] ? canonicalItemName(matchingItems[0], marketCriteria.itemName) : marketCriteria.itemName,
         category: marketCriteria.category,
+        includeIncomplete: marketCriteria.includeIncomplete,
         searchTerms: marketCriteria.searchTerms,
         searchKeywords: searchedKeywords,
         rawCount: dedupeAuctionItems(allAuctionItems).length,
@@ -611,6 +618,7 @@ export class MabinogiClient {
       itemName: marketCriteria.itemName,
       resolvedItemName,
       category: marketCriteria.category,
+      includeIncomplete: marketCriteria.includeIncomplete,
       searchTerms: marketCriteria.searchTerms,
       searchKeywords: searchedKeywords,
       rawCount: dedupeAuctionItems(allAuctionItems).length,

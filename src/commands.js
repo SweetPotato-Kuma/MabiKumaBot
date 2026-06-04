@@ -41,6 +41,7 @@ const CUSTOM_ID = {
   wizardNameButtonPrefix: "guma:wizard-name",
   wizardRunButtonPrefix: "guma:wizard-run",
   wizardCancelButtonPrefix: "guma:wizard-cancel",
+  wizardIncompleteButtonPrefix: "guma:wizard-incomplete",
   wizardNameModalPrefix: "guma:wizard-name-modal",
   listPagePrefix: "guma:list-page",
   listLabelPrefix: "guma:list-label",
@@ -135,6 +136,7 @@ function createWizardState(userId, mode) {
     itemListName: "",
     itemSearchTerms: [],
     itemCandidates: [],
+    includeIncomplete: false,
     itemVerified: false,
     itemValidationError: "",
     createdAt: Date.now(),
@@ -175,6 +177,7 @@ function normalizeItemCandidates(candidates) {
       listItemName: normalizeItemName(candidate?.listItemName),
       searchTerms: Array.isArray(candidate?.searchTerms) ? candidate.searchTerms.map(normalizeItemName).filter(Boolean) : [itemName],
       pricePerUnit: Number.isFinite(candidate.pricePerUnit) ? candidate.pricePerUnit : null,
+      isIncomplete: Boolean(candidate?.isIncomplete),
     });
   }
 
@@ -187,7 +190,9 @@ async function updateWizardItemCandidates(state, context) {
     return [];
   }
 
-  const candidates = await context.mabinogiClient.suggestAuctionItems(state.itemName, { limit: 25 }).catch(() => []);
+  const candidates = await context.mabinogiClient
+    .suggestAuctionItems(state.itemName, { limit: 25, includeIncomplete: state.includeIncomplete })
+    .catch(() => []);
   state.itemCandidates = normalizeItemCandidates(candidates);
   return state.itemCandidates;
 }
@@ -206,6 +211,7 @@ function applyCandidateToWizardState(state, candidate) {
   state.itemCategory = candidate.category ?? "";
   state.itemListName = candidate.listItemName ?? "";
   state.itemSearchTerms = Array.isArray(candidate.searchTerms) ? candidate.searchTerms : [candidate.itemName];
+  state.includeIncomplete = state.includeIncomplete || Boolean(candidate.isIncomplete);
   state.itemVerified = true;
   state.itemValidationError = "";
 }
@@ -219,6 +225,7 @@ function applyItemCheckToWizardState(state, itemCheck) {
     Array.isArray(itemCheck?.searchTerms) && itemCheck.searchTerms.length > 0
       ? itemCheck.searchTerms.map(normalizeItemName).filter(Boolean)
       : [resolvedItemName].filter(Boolean);
+  state.includeIncomplete = state.includeIncomplete || Boolean(itemCheck?.firstItem?.isIncomplete);
   state.itemVerified = true;
   state.itemValidationError = "";
 }
@@ -239,7 +246,7 @@ async function validateWizardItemName(state, context, { timeoutMs = 1800 } = {})
   }
 
   const itemCheck = await context.mabinogiClient
-    .findAuctionItem(state.itemName, { maxPages: 1, timeoutMs })
+    .findAuctionItem(state.itemName, { maxPages: 1, timeoutMs, includeIncomplete: state.includeIncomplete })
     .catch((error) => ({ error }));
   if (itemCheck.error) {
     state.itemValidationError = `아이템 검증 중 오류가 발생했습니다: ${itemCheck.error.message}`;
@@ -253,6 +260,26 @@ async function validateWizardItemName(state, context, { timeoutMs = 1800 } = {})
 
   applyItemCheckToWizardState(state, itemCheck);
   return itemCheck;
+}
+
+async function refreshWizardItemValidation(state, context) {
+  resetWizardItemValidation(state);
+  await updateWizardItemCandidates(state, context);
+
+  const exactCandidate = exactCandidateForItemName(state);
+  if (exactCandidate) {
+    applyCandidateToWizardState(state, exactCandidate);
+    return `경매장 매물을 확인했습니다: ${state.itemName}`;
+  }
+
+  const itemCheck = await validateWizardItemName(state, context);
+  if (itemCheck) {
+    return `경매장 매물을 확인했습니다: ${state.itemName}`;
+  }
+
+  return state.itemCandidates.length > 0
+    ? "비슷한 경매장 매물을 찾았습니다. 아래 후보에서 선택하거나 그대로 진행할 수 있습니다."
+    : "아이템명을 검증하지 못했습니다. 이름을 다시 확인해 주세요.";
 }
 
 function getWizardValidationLabel(state) {
@@ -273,6 +300,9 @@ function getWizardValidationLabel(state) {
 
 function candidateOptionDescription(candidate) {
   const parts = [];
+  if (candidate.isIncomplete) {
+    parts.push("미완성");
+  }
   if (candidate.category) {
     parts.push(candidate.category);
   }
@@ -415,6 +445,7 @@ function buildWizardPanel(state, notice = "") {
     .addFields(
       { name: "아이템명", value: state.itemName || "미입력", inline: true },
       { name: "검증", value: getWizardValidationLabel(state), inline: true },
+      { name: "미완성 매물", value: state.includeIncomplete ? "포함" : "제외", inline: true },
       ...(state.itemCategory ? [{ name: "자동 분류", value: state.itemCategory, inline: true }] : []),
       ...(state.itemValidationError ? [{ name: "검증 실패", value: truncateText(state.itemValidationError, 1000) }] : []),
     );
@@ -452,6 +483,10 @@ function buildWizardPanel(state, notice = "") {
         .setLabel(actionLabel)
         .setStyle(ButtonStyle.Primary)
         .setDisabled(!state.itemName),
+      new ButtonBuilder()
+        .setCustomId(customIdWithState(CUSTOM_ID.wizardIncompleteButtonPrefix, state.id))
+        .setLabel(state.includeIncomplete ? "미완성 포함" : "미완성 제외")
+        .setStyle(state.includeIncomplete ? ButtonStyle.Success : ButtonStyle.Secondary),
       new ButtonBuilder()
         .setCustomId(customIdWithState(CUSTOM_ID.wizardCancelButtonPrefix, state.id))
         .setLabel("취소")
@@ -585,6 +620,7 @@ function buildMarketEmbed(marketData, alertDiscountPercent) {
     .setColor(isAlert ? 0xe03131 : 0x2f9e44)
     .addFields(
       ...(marketData.category ? [{ name: "자동 분류", value: marketData.category, inline: true }] : []),
+      { name: "미완성 매물", value: marketData.includeIncomplete ? "포함" : "제외", inline: true },
       { name: "최저 등록가", value: formatGold(marketData.lowestPrice), inline: true },
       { name: "기준가(차순위)", value: formatGold(marketData.nextPrice), inline: true },
       { name: "할인율", value: formatPercent(marketData.discountRate), inline: true },
@@ -625,13 +661,14 @@ function formatItemValidationFailure(itemName, itemCheck) {
 
 function normalizeWizardCriteria(criteria) {
   if (typeof criteria === "string") {
-    return { itemName: normalizeItemName(criteria), category: "", listItemName: "", searchTerms: [] };
+    return { itemName: normalizeItemName(criteria), category: "", listItemName: "", includeIncomplete: false, searchTerms: [] };
   }
 
   return {
     itemName: normalizeItemName(criteria?.itemName),
     category: normalizeItemName(criteria?.category),
     listItemName: normalizeItemName(criteria?.listItemName),
+    includeIncomplete: Boolean(criteria?.includeIncomplete),
     searchTerms: Array.isArray(criteria?.searchTerms) ? criteria.searchTerms.map(normalizeItemName).filter(Boolean) : [],
   };
 }
@@ -646,15 +683,20 @@ async function runMarketSearch(interaction, context, rawCriteria) {
     return false;
   }
 
-  const itemCheck = await mabinogiClient.findAuctionItem(itemName).catch(() => null);
+  const itemCheck = await mabinogiClient.findAuctionItem(itemName, { includeIncomplete: inputCriteria.includeIncomplete }).catch(() => null);
   const criteria = itemCheck?.found
     ? {
         itemName: itemCheck.resolvedItemName,
         category: inputCriteria.category || itemCheck.category,
         listItemName: inputCriteria.listItemName || itemCheck.listItemName,
+        includeIncomplete: inputCriteria.includeIncomplete,
         searchTerms: inputCriteria.searchTerms.length > 0 ? inputCriteria.searchTerms : itemCheck.searchTerms,
       }
-    : itemName;
+    : {
+        itemName,
+        includeIncomplete: inputCriteria.includeIncomplete,
+        searchTerms: inputCriteria.searchTerms,
+      };
   const marketData = await mabinogiClient.fetchMarketData(criteria);
   if (!marketData.found) {
     await interaction.editReply(
@@ -688,7 +730,9 @@ async function addMonitoringItem(interaction, context, rawCriteria) {
     return false;
   }
 
-  const itemCheck = await mabinogiClient.findAuctionItem(normalizedInput).catch((error) => ({ error }));
+  const itemCheck = await mabinogiClient
+    .findAuctionItem(normalizedInput, { includeIncomplete: inputCriteria.includeIncomplete })
+    .catch((error) => ({ error }));
   if (itemCheck.error) {
     await interaction.editReply(`아이템 검증 중 오류가 발생했습니다: ${itemCheck.error.message}`);
     return false;
@@ -703,6 +747,7 @@ async function addMonitoringItem(interaction, context, rawCriteria) {
     itemName: resolvedItemName,
     category: inputCriteria.category || itemCheck.category,
     listItemName: inputCriteria.listItemName || itemCheck.listItemName,
+    includeIncomplete: inputCriteria.includeIncomplete,
     searchTerms: inputCriteria.searchTerms.length > 0 ? inputCriteria.searchTerms : itemCheck.searchTerms,
   };
   const result = await itemStore.add(scopeId, monitoringItem);
@@ -716,10 +761,11 @@ async function addMonitoringItem(interaction, context, rawCriteria) {
   monitor.clearCooldown(scopeId, monitoringItem);
   const resolvedNote = resolvedItemName !== normalizedInput ? `\n입력값: ${normalizedInput}\n매칭명: ${resolvedItemName}` : "";
   const scopeNote = monitoringItem.category ? `\n자동 분류: ${monitoringItem.category}` : "";
+  const incompleteNote = monitoringItem.includeIncomplete ? "\n미완성 매물: 포함" : "";
   const termsNote =
     monitoringItem.searchTerms?.length > 1 ? `\n검색 범위: ${monitoringItem.searchTerms.slice(0, 4).join(", ")}` : "";
   await interaction.editReply(
-    `추가 완료: ${formatMonitoringItem(monitoringItem)}${resolvedNote}${scopeNote}${termsNote}\n\n서버 현재 목록:\n${formatItemListForReply(result.items)}`,
+    `추가 완료: ${formatMonitoringItem(monitoringItem)}${resolvedNote}${scopeNote}${incompleteNote}${termsNote}\n\n서버 현재 목록:\n${formatItemListForReply(result.items)}`,
   );
   return true;
 }
@@ -735,6 +781,7 @@ async function runWizard(interaction, context, state) {
     itemName,
     category: state.itemCategory,
     listItemName: state.itemListName,
+    includeIncomplete: state.includeIncomplete,
     searchTerms: state.itemSearchTerms,
   };
   const completed =
@@ -791,6 +838,28 @@ async function handleButton(interaction, context) {
 
     await interaction.deferUpdate();
     await runWizard(interaction, context, state);
+    return;
+  }
+
+  const incompleteStateId = parseStateId(interaction.customId, CUSTOM_ID.wizardIncompleteButtonPrefix);
+  if (incompleteStateId) {
+    const state = getWizardState(interaction, incompleteStateId);
+    if (!state) {
+      await interaction.reply(privateReply("이 선택 UI가 만료되었습니다. `/구마`에서 다시 시작해 주세요."));
+      return;
+    }
+
+    state.includeIncomplete = !state.includeIncomplete;
+    await interaction.deferUpdate();
+
+    if (!state.itemName) {
+      const notice = state.includeIncomplete ? "미완성 매물도 포함하도록 설정했습니다." : "미완성 매물은 제외하도록 설정했습니다.";
+      await interaction.editReply(buildWizardPanel(state, notice));
+      return;
+    }
+
+    const notice = await refreshWizardItemValidation(state, context);
+    await interaction.editReply(buildWizardPanel(state, notice));
     return;
   }
 
@@ -945,31 +1014,8 @@ async function handleModalSubmit(interaction, context) {
     }
 
     state.itemName = normalizeItemName(interaction.fields.getTextInputValue(ITEM_INPUT_ID));
-    resetWizardItemValidation(state);
-
-    await updateWizardItemCandidates(state, context);
-    const exactCandidate = exactCandidateForItemName(state);
-    if (exactCandidate) {
-      applyCandidateToWizardState(state, exactCandidate);
-      await respondToWizardModal(interaction, buildWizardPanel(state, `경매장 매물을 확인했습니다: ${state.itemName}`));
-      return;
-    }
-
-    const itemCheck = await validateWizardItemName(state, context);
-    if (itemCheck) {
-      await respondToWizardModal(interaction, buildWizardPanel(state, `경매장 매물을 확인했습니다: ${state.itemName}`));
-      return;
-    }
-
-    await respondToWizardModal(
-      interaction,
-      buildWizardPanel(
-        state,
-        state.itemCandidates.length > 0
-          ? "비슷한 경매장 매물을 찾았습니다. 아래 후보에서 선택하거나 그대로 진행할 수 있습니다."
-          : "아이템명을 검증하지 못했습니다. 이름을 다시 확인해 주세요.",
-      ),
-    );
+    const notice = await refreshWizardItemValidation(state, context);
+    await respondToWizardModal(interaction, buildWizardPanel(state, notice));
   }
 }
 

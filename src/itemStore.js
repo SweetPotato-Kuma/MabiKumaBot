@@ -59,11 +59,16 @@ export function normalizeMonitoringItem(item) {
     item && typeof item === "object" && !Array.isArray(item)
       ? uniqueNames([...(Array.isArray(item.searchTerms) ? item.searchTerms : []), itemName])
       : uniqueNames([itemName]);
+  const includeIncomplete =
+    item && typeof item === "object" && !Array.isArray(item)
+      ? Boolean(item.includeIncomplete ?? item.allowIncomplete ?? item.includeUnfinished)
+      : false;
 
   return {
     itemName,
     category,
     listItemName,
+    includeIncomplete,
     searchTerms,
   };
 }
@@ -80,6 +85,7 @@ function serializeMonitoringItem(item) {
     ...(normalized.listItemName && normalizeItemKey(normalized.listItemName) !== normalizeItemKey(normalized.itemName)
       ? { listItemName: normalized.listItemName }
       : {}),
+    ...(normalized.includeIncomplete ? { includeIncomplete: true } : {}),
     ...(normalized.searchTerms.length > 1 ||
     (normalized.searchTerms.length === 1 && normalizeItemKey(normalized.searchTerms[0]) !== normalizeItemKey(normalized.itemName))
       ? { searchTerms: normalized.searchTerms }
@@ -93,7 +99,8 @@ export function formatMonitoringItem(item) {
     return "";
   }
 
-  return normalized.category ? `${normalized.itemName} [${normalized.category}]` : normalized.itemName;
+  const tags = [normalized.category, normalized.includeIncomplete ? "미완성 포함" : ""].filter(Boolean);
+  return tags.length > 0 ? `${normalized.itemName} [${tags.join(", ")}]` : normalized.itemName;
 }
 
 export function monitoringItemKey(item) {
@@ -330,8 +337,13 @@ export class ItemStore {
     const existingItem = existingIndex === -1 ? null : serializeMonitoringItem(scopeItems[existingIndex]);
 
     if (existingItem) {
-      if (itemPreferenceScore(normalized) > itemPreferenceScore(existingItem)) {
-        scopeItems[existingIndex] = normalized;
+      const includeIncompleteChanged = existingItem.includeIncomplete !== normalized.includeIncomplete;
+      if (includeIncompleteChanged || itemPreferenceScore(normalized) > itemPreferenceScore(existingItem)) {
+        const nextItem =
+          itemPreferenceScore(normalized) >= itemPreferenceScore(existingItem)
+            ? normalized
+            : serializeMonitoringItem({ ...existingItem, includeIncomplete: normalized.includeIncomplete });
+        scopeItems[existingIndex] = nextItem;
         await this.save();
         return {
           added: false,

@@ -201,7 +201,9 @@ export class PriceMonitor {
 
   async resolveMonitoringItemCategory(scopeId, monitoringItem) {
     try {
-      const itemCheck = await this.mabinogiClient.findAuctionItem(monitoringItem.itemName);
+      const itemCheck = await this.mabinogiClient.findAuctionItem(monitoringItem.itemName, {
+        includeIncomplete: monitoringItem.includeIncomplete,
+      });
       if (!itemCheck.found || !itemCheck.category) {
         return monitoringItem;
       }
@@ -210,6 +212,7 @@ export class PriceMonitor {
         itemName: itemCheck.resolvedItemName || monitoringItem.itemName,
         category: itemCheck.category,
         listItemName: itemCheck.listItemName,
+        includeIncomplete: monitoringItem.includeIncomplete,
         searchTerms: itemCheck.searchTerms?.length > 0 ? itemCheck.searchTerms : monitoringItem.searchTerms,
       };
       const result = await this.itemStore.add(scopeId, resolvedItem);
@@ -229,6 +232,7 @@ export class PriceMonitor {
       itemName: marketData.itemName,
       category: marketData.category,
       listItemName: marketData.listItemName,
+      includeIncomplete: marketData.includeIncomplete,
       searchTerms: marketData.searchTerms,
     });
     const now = Date.now();
@@ -263,6 +267,7 @@ export class PriceMonitor {
       .setDescription(`기준가 대비 ${alertDiscountPercent}% 이상 낮은 매물을 찾았습니다.`)
       .addFields(
         ...(marketData.category ? [{ name: "자동 분류", value: marketData.category, inline: true }] : []),
+        { name: "미완성 매물", value: marketData.includeIncomplete ? "포함" : "제외", inline: true },
         { name: "최저 등록가", value: formatGold(marketData.lowestPrice), inline: true },
         { name: "기준가(차순위)", value: formatGold(marketData.nextPrice), inline: true },
         { name: "할인율", value: formatPercent(marketData.discountRate), inline: true },
@@ -277,6 +282,8 @@ export class PriceMonitor {
   }
 
   buildCooldownKey(scopeId, itemName) {
-    return `${scopeId ?? "global"}:${monitoringItemKey(itemName)}`;
+    const normalized = normalizeMonitoringItem(itemName);
+    const incompleteSuffix = normalized?.includeIncomplete ? ":include-incomplete" : "";
+    return `${scopeId ?? "global"}:${monitoringItemKey(itemName)}${incompleteSuffix}`;
   }
 }
