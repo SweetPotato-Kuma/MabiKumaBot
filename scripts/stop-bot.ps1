@@ -1,5 +1,14 @@
 $ErrorActionPreference = "Stop"
 
+$Utf8NoBom = New-Object System.Text.UTF8Encoding $false
+try {
+  [Console]::InputEncoding = $Utf8NoBom
+  [Console]::OutputEncoding = $Utf8NoBom
+} catch {
+  # Console encoding may be unavailable when the script is launched without an attached console.
+}
+$OutputEncoding = $Utf8NoBom
+
 $Root = Split-Path -Parent $PSScriptRoot
 $RuntimeDir = Join-Path $Root "runtime"
 $PidFile = Join-Path $RuntimeDir "guma-bot.pid"

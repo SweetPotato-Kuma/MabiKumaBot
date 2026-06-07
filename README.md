@@ -70,6 +70,18 @@ Windows에서는 실행기를 사용할 수 있습니다.
 
 `AUTO_DEPLOY_COMMANDS=true`이면 봇 시작 시 현재 속한 Discord 서버를 자동으로 읽어 각 서버에 `/구마` 명령어를 등록합니다. 봇이 새 서버에 초대되는 경우에도 해당 서버에 명령어를 자동 등록합니다.
 
+### Windows 한글 출력
+
+README, 로그, PowerShell 출력의 한글이 깨져 보이면 콘솔 코드페이지가 UTF-8이 아닌 상태입니다. `start-bot.bat`, `stop-bot.bat`은 실행 시 자동으로 UTF-8 코드페이지(`65001`)를 사용합니다.
+
+수동으로 파일을 확인할 때는 아래처럼 UTF-8로 읽어 주세요.
+
+```powershell
+chcp 65001
+Get-Content -Encoding UTF8 README.md
+Get-Content -Encoding UTF8 bot.log -Tail 50
+```
+
 ## 명령어
 
 기본 관리는 `/구마` 버튼 UI를 사용합니다.
