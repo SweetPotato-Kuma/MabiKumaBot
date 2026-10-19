@@ -136,7 +136,14 @@ export function favoritesView(status) {
       ),
     );
   }
-  components.push(row(button("f:add", "추가", PRIMARY), button("m:fav", "새로고침"), menuButton()));
+  components.push(
+    row(
+      button("f:add", "추가", PRIMARY),
+      button("f:imp", "사이트에서 가져오기"),
+      button("m:fav", "새로고침"),
+      menuButton(),
+    ),
+  );
   return view(favoritesStatusMessages(status)[0], components);
 }
 
@@ -258,15 +265,53 @@ export function settingsView(settings) {
   );
 }
 
-export function meView(user, favoriteCount) {
+export function meView(user, favoriteCount, linked) {
   return view(
     [
       "**내 정보**",
       `즐겨찾기 ${favoriteCount}개 · 아르바이트 ${user.arbeit.length}개 · 동의 ${relativeTime(user.consentedAt)}`,
+      `사이트 계정 ${linked ? "연결됨" : "연결 안 됨"}`,
       "-# 삭제하면 설정, 구독, 즐겨찾기가 모두 지워지며 되돌릴 수 없습니다.",
     ].join("\n"),
-    [row(button("me:ask", "모든 정보 삭제", DANGER), menuButton())],
+    [
+      row(
+        linked ? button("me:unlink", "사이트 연결 해제") : button("me:link", "사이트 계정 연결", PRIMARY),
+        button("me:ask", "모든 정보 삭제", DANGER),
+        menuButton(),
+      ),
+    ],
   );
+}
+
+/** 사이트 프로필에 입력할 일회용 코드. 코드 칸은 길게 눌러 복사하기 쉽게 코드 서식으로 둔다. */
+export function linkCodeView(code) {
+  return view(
+    [
+      "**사이트 계정 연결 코드**",
+      `\`${code}\``,
+      "사이트에 로그인한 뒤 프로필의 디스코드 연결에 입력하세요. 10분 안에 한 번만 쓸 수 있습니다.",
+    ].join("\n"),
+    [row(linkButton("사이트 열기", SITE_URL), menuButton())],
+  );
+}
+
+/** 사이트 즐겨찾기를 가져온 결과. 0 인 줄은 보이지 않는다. */
+export function importResultView(result) {
+  const lines = [];
+  if (result.added.length > 0) {
+    lines.push(`**사이트 즐겨찾기 ${result.added.length}개를 가져왔습니다.**`);
+    lines.push(...result.added.slice(0, 10).map((name) => `• ${name}`));
+  } else {
+    lines.push("**가져온 즐겨찾기가 없습니다.**");
+  }
+  if (result.existing > 0) lines.push(`이미 있는 항목 ${result.existing}개`);
+  if (result.unknown.length > 0) {
+    const shown = result.unknown.slice(0, 5).join(", ");
+    lines.push(`이름이 아이템과 정확히 맞지 않아 건너뜀: ${shown}${result.unknown.length > 5 ? " 외" : ""}`);
+  }
+  if (result.full > 0) lines.push(`즐겨찾기가 가득 차 ${result.full}개는 가져오지 못했습니다.`);
+  if (result.complex > 0) lines.push(`상세 조건이 있는 검색 ${result.complex}개는 사이트에서만 쓸 수 있습니다.`);
+  return view(lines.join("\n"), [row(button("m:fav", "즐겨찾기 열기", PRIMARY), menuButton())]);
 }
 
 export function confirmDeleteView() {

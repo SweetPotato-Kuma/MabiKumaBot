@@ -11,6 +11,8 @@ import {
   erinView,
   favoriteDetailView,
   favoritesView,
+  importResultView,
+  linkCodeView,
   meView,
   menuView,
   noticeView,
@@ -178,9 +180,10 @@ async function openTarget(env, uid, target, now) {
     case "set":
       return personal(env, uid, "set", (user) => update(settingsView(user.settings)));
     case "me":
-      return personal(env, uid, "me", async (user) =>
-        update(meView(user, (await env.SITE.listFavorites(uid)).length)),
-      );
+      return personal(env, uid, "me", async (user) => {
+        const [favorites, link] = await Promise.all([env.SITE.listFavorites(uid), env.SITE.linkStatus(uid)]);
+        return update(meView(user, favorites.length, link.linked));
+      });
     default:
       return update(menuView(null));
   }
@@ -231,6 +234,19 @@ async function favoritesComponent(env, interaction, act, rest, values) {
     case "del":
       await env.SITE.removeFavorite(uid, rest);
       return deferred("update", () => favoritesListView(env, uid));
+    case "imp": {
+      const user = await env.SITE.getUser(uid);
+      if (!user) return update(consentView("fav"));
+      if (!(await env.SITE.linkStatus(uid)).linked) {
+        return newMessage(
+          noticeView(
+            "사이트 계정을 먼저 연결해 주세요. 연결 코드를 받아 사이트 프로필에 입력하면 됩니다.",
+            button("me:link", "연결 코드 받기", 1),
+          ),
+        );
+      }
+      return deferred("update", async () => importResultView(await env.SITE.importSiteFavorites(uid)));
+    }
     case "pa": {
       const target = rest === "-" ? undefined : Number(rest);
       await env.SITE.addFavorite(uid, values[0], target);
@@ -283,6 +299,15 @@ async function settingsComponent(env, interaction, act, values) {
 async function meComponent(env, interaction, act) {
   const uid = userIdOf(interaction);
   if (act === "ask") return update(confirmDeleteView());
+  if (act === "link") {
+    if (!(await env.SITE.getUser(uid))) return newMessage(consentView("me"));
+    const { code } = await env.SITE.createLinkCode(uid);
+    return newMessage(linkCodeView(code));
+  }
+  if (act === "unlink") {
+    await env.SITE.unlinkDiscord(uid);
+    return openTarget(env, uid, "me");
+  }
   if (act === "del") {
     await env.SITE.deleteUser(uid);
     return update(deletedView());
