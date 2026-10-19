@@ -1,4 +1,4 @@
-import { runArbeitAlerts } from "./alerts.js";
+import { runArbeitAlerts, runFavoriteAlerts } from "./alerts.js";
 import { handleAutocomplete, handleCommand, handleComponent } from "./commands.js";
 import { readVerifiedBody } from "./verify.js";
 
@@ -47,13 +47,13 @@ export default {
     }
   },
 
-  /** 1분마다 깨어나 지난 1분 사이에 보고 가능해진 아르바이트를 알린다. */
+  /** 1분마다 깨어나 보고 가능해진 아르바이트와 목표 가격에 닿은 즐겨찾기를 알린다. */
   async scheduled(controller, env, ctx) {
-    ctx.waitUntil(
-      runArbeitAlerts(env, controller.scheduledTime).then(
-        (summary) => console.log(JSON.stringify({ arbeit: summary })),
-        (error) => console.error(JSON.stringify({ arbeit: String(error?.message ?? error) })),
-      ),
-    );
+    const run = (name, job) =>
+      job(env, controller.scheduledTime).then(
+        (summary) => console.log(JSON.stringify({ [name]: summary })),
+        (error) => console.error(JSON.stringify({ [name]: String(error?.message ?? error) })),
+      );
+    ctx.waitUntil(Promise.all([run("arbeit", runArbeitAlerts), run("favorites", runFavoriteAlerts)]));
   },
 };

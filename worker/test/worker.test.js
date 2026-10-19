@@ -98,6 +98,37 @@ function fakeSite() {
     async searchItems(query) {
       return site.items.filter((name) => name.startsWith(query));
     },
+    async dueFavoriteAlerts(minuteIndex) {
+      calls.push(["dueFavoriteAlerts", minuteIndex]);
+      return [];
+    },
+    favorites: new Map(),
+    status: { checkedAt: 1_700_000_000_000, items: [] },
+    favoriteDue: [],
+    async listFavorites(id) {
+      return site.favorites.get(id) ?? [];
+    },
+    async addFavorite(id, name, target) {
+      calls.push(["addFavorite", id, name, target]);
+      if (name === "너무많음") throw new Error("즐겨찾기는 20개까지 둘 수 있습니다.");
+      const list = site.favorites.get(id) ?? [];
+      const found = list.find((favorite) => favorite.name === name);
+      if (found) found.targetPrice = target === undefined ? found.targetPrice : target || null;
+      else list.push({ name, targetPrice: target || null });
+      site.favorites.set(id, list);
+      return list;
+    },
+    async removeFavorite(id, name) {
+      calls.push(["removeFavorite", id, name]);
+      site.favorites.set(id, (site.favorites.get(id) ?? []).filter((favorite) => favorite.name !== name));
+    },
+    async favoritesStatus() {
+      return site.status;
+    },
+    async dueFavoriteAlerts(minuteIndex) {
+      calls.push(["dueFavoriteAlerts", minuteIndex]);
+      return site.favoriteDue;
+    },
     async marketSummary(name) {
       calls.push(["marketSummary", name]);
       return site.summary;
@@ -261,26 +292,26 @@ describe("아르바이트 알림 명령", () => {
     });
 
     it("설정을 바꾼다", async () => {
-      await handleCommand(command(["구마", "알바", "설정"], { 묶어서받기: false, 일시정지: true }), env);
+      await handleCommand(command(["구마", "알림설정"], { 묶어서받기: false, 일시정지: true }), env);
       assert.deepEqual(site.calls.at(-1), ["updateSettings", ALICE, { digest: false, paused: true }]);
 
-      const quiet = await handleCommand(command(["구마", "알바", "설정"], { 조용한시작: 23, 조용한끝: 7 }), env);
+      const quiet = await handleCommand(command(["구마", "알림설정"], { 조용한시작: 23, 조용한끝: 7 }), env);
       assert.deepEqual(site.calls.at(-1), ["updateSettings", ALICE, { quiet: { start: 23, end: 7 } }]);
       assert.match(content(quiet), /조용한 시간 23시~7시/);
 
-      await handleCommand(command(["구마", "알바", "설정"], { 조용한시간끄기: true }), env);
+      await handleCommand(command(["구마", "알림설정"], { 조용한시간끄기: true }), env);
       assert.deepEqual(site.calls.at(-1), ["updateSettings", ALICE, { quiet: null }]);
     });
 
     it("조용한 시간은 시작과 끝을 함께 받고 같은 값은 받지 않는다", async () => {
       const before = site.calls.length;
-      assert.match(content(await handleCommand(command(["구마", "알바", "설정"], { 조용한시작: 5 }), env)), /함께/);
-      assert.match(content(await handleCommand(command(["구마", "알바", "설정"], { 조용한시작: 5, 조용한끝: 5 }), env)), /같으면/);
+      assert.match(content(await handleCommand(command(["구마", "알림설정"], { 조용한시작: 5 }), env)), /함께/);
+      assert.match(content(await handleCommand(command(["구마", "알림설정"], { 조용한시작: 5, 조용한끝: 5 }), env)), /같으면/);
       assert.equal(site.calls.length, before);
     });
 
     it("값을 주지 않으면 현재 설정만 보여 준다", async () => {
-      const text = content(await handleCommand(command(["구마", "알바", "설정"]), env));
+      const text = content(await handleCommand(command(["구마", "알림설정"]), env));
       assert.match(text, /현재 설정/);
       assert.equal(site.calls.filter((call) => call[0] === "updateSettings").length, 0);
     });
@@ -337,6 +368,8 @@ describe("시세", () => {
         { date: "2026-10-18", mid: 240 },
         { date: "2026-10-19", mid: 250 },
       ],
+      lowest: { price: 199, listings: 7, checkedAt: 1_700_000_000_000 },
+      links: { item: "https://mabi.spkuma.com/item/a?ref=bot", auction: "https://mabi.spkuma.com/auction?keyword=a&exact=1&ref=bot" },
     };
     const reply = await handleCommand(command(["구마", "시세"], { 아이템: "마나 허브" }), { SITE: site });
 
@@ -345,6 +378,22 @@ describe("시세", () => {
     assert.match(content(reply), /거래 1,234건 · 수량 5,678/);
     assert.match(content(reply), /중위가 \*\*250\*\*/);
     assert.match(content(reply), /10-18 240 · 10-19 250/);
+    assert.match(content(reply), /현재 최저가 \*\*199\*\* \(매물 7개\) <t:1700000000:R>/);
+    assert.deepEqual(
+      reply.data.components[0].components.map((b) => [b.style, b.label]),
+      [
+        [5, "아이템 페이지"],
+        [5, "경매장에서 보기"],
+      ],
+    );
+    assert.match(content(reply), /현재 최저가 \*\*199\*\* \(매물 7개\) <t:1700000000:R>/);
+    assert.deepEqual(
+      reply.data.components[0].components.map((b) => [b.style, b.label, b.url]),
+      [
+        [5, "아이템 페이지", "https://mabi.spkuma.com/item/a?ref=bot"],
+        [5, "경매장에서 보기", "https://mabi.spkuma.com/auction?keyword=a&exact=1&ref=bot"],
+      ],
+    );
   });
 
   it("거래 기록이 없으면 본인에게만 안내한다", async () => {
@@ -395,8 +444,8 @@ describe("자동완성", () => {
   });
 
   it("중첩된 입력에서 경로와 값을 읽는다", () => {
-    const parsed = parseInteraction(command(["구마", "알바", "설정"], { 조용한시작: 23 }));
-    assert.deepEqual(parsed.path, ["구마", "알바", "설정"]);
+    const parsed = parseInteraction(command(["구마", "알림설정"], { 조용한시작: 23 }));
+    assert.deepEqual(parsed.path, ["구마", "알림설정"]);
     assert.deepEqual(parsed.values, { 조용한시작: 23 });
   });
 });
@@ -548,6 +597,14 @@ describe("알림 보내기", () => {
     await worker.scheduled({ scheduledTime: 1_700_000_120_000 }, env, { waitUntil: (p) => waited.push(p) });
     await Promise.all(waited);
 
-    assert.deepEqual(site.calls[0], ["dueArbeitAlerts", 1_700_000_060_000, 1_700_000_120_000]);
+    assert.deepEqual(site.calls.find((c) => c[0] === "dueArbeitAlerts"), [
+      "dueArbeitAlerts",
+      1_700_000_060_000,
+      1_700_000_120_000,
+    ]);
+    assert.deepEqual(site.calls.find((c) => c[0] === "dueFavoriteAlerts"), [
+      "dueFavoriteAlerts",
+      Math.floor(1_700_000_120_000 / 60_000),
+    ]);
   });
 });
