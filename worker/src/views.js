@@ -1,0 +1,284 @@
+import { erinClock, formatErinClock, formatShopReset, msUntilShopReset } from "./erin.js";
+import { favoritesStatusMessages, marketText, relativeTime, won } from "./format.js";
+
+/** 동의 문구가 바뀌면 이 값과 사이트의 개인정보처리방침을 함께 고친다. */
+export const CONSENT_VERSION = "2026-10-19";
+
+const PRIVACY_URL = "https://mabi.spkuma.com/privacy";
+const SITE_URL = "https://mabi.spkuma.com/?ref=bot";
+
+const PRIMARY = 1;
+const SECONDARY = 2;
+const SUCCESS = 3;
+const DANGER = 4;
+const LINK = 5;
+
+export const button = (customId, label, style = SECONDARY, extra = {}) => ({
+  type: 2,
+  custom_id: customId,
+  label,
+  style,
+  ...extra,
+});
+export const linkButton = (label, url) => ({ type: 2, style: LINK, label, url });
+export const row = (...components) => ({ type: 1, components });
+export const select = (customId, placeholder, options, { min = 1, max = 1 } = {}) => ({
+  type: 3,
+  custom_id: customId,
+  placeholder,
+  min_values: min,
+  max_values: Math.min(max, options.length),
+  options,
+});
+
+const menuButton = () => button("m:menu", "← 메뉴");
+const view = (content, components = []) => ({ content, components });
+
+/** 메뉴. 동의한 사용자에게는 지금 상태를 한 줄로 보여 준다. */
+export function menuView(overview) {
+  const lines = ["**마비쿠마**", "원하는 기능을 눌러 주세요."];
+  if (overview) {
+    const state = overview.paused ? "알림 일시정지" : "알림 켜짐";
+    lines.push(`-# 즐겨찾기 ${overview.favorites}개 · 아르바이트 ${overview.arbeit}개 · ${state}`);
+  }
+  return view(lines.join("\n"), [
+    row(
+      button("m:price", "시세 조회", PRIMARY),
+      button("m:fav", "즐겨찾기"),
+      button("m:ab", "아르바이트 알림"),
+      button("m:erin", "에린 시계"),
+    ),
+    row(button("m:set", "알림 설정"), button("m:me", "내 정보"), linkButton("사이트 열기", SITE_URL)),
+  ]);
+}
+
+/** 개인 기능을 처음 쓸 때의 동의 화면. 동의하면 가려던 화면으로 이어 간다. */
+export function consentView(target) {
+  return view(
+    [
+      "**개인 기능을 켜려면 동의가 필요합니다.**",
+      "저장하는 정보: 디스코드 사용자 번호, 동의 시점, 알림 설정, 구독한 아르바이트 항목, 즐겨찾기와 목표 가격",
+      "쓰는 곳: 알림을 DM으로 보내는 데에만 씁니다.",
+      "지우는 방법: 메뉴의 내 정보에서 삭제",
+      `자세한 내용: ${PRIVACY_URL}`,
+    ].join("\n"),
+    [row(button(`c:ok:${target}`, "동의하고 시작", SUCCESS), menuButton())],
+  );
+}
+
+export function erinText(now) {
+  const clock = erinClock(now);
+  const phase = clock.day ? "낮" : "밤";
+  return `에린 시각 **${formatErinClock(clock)}** (${phase})\n다음 상점 교체까지 **${formatShopReset(msUntilShopReset(now))}**`;
+}
+
+export function erinView(now) {
+  return view(erinText(now), [
+    row(button("e:r", "새로고침"), button("e:share", "채널에 공유"), menuButton()),
+  ]);
+}
+
+const priceLinks = (links) => [
+  linkButton("아이템 페이지", links.item),
+  linkButton("경매장에서 보기", links.auction),
+];
+
+/** 시세 화면. 공유용(share)은 개인 버튼 없이 링크만 붙인다. */
+export function priceView(summary, { share = false } = {}) {
+  if (share) {
+    return view(marketText(summary), [row(...priceLinks(summary.links))]);
+  }
+  return view(marketText(summary), [
+    row(
+      button(`p:share:${summary.name}`, "채널에 공유", PRIMARY),
+      button(`p:fav:${summary.name}`, "즐겨찾기에 추가"),
+      button(`p:r:${summary.name}`, "새로고침"),
+      menuButton(),
+    ),
+    row(...priceLinks(summary.links), button("m:price", "다른 아이템")),
+  ]);
+}
+
+/** 이름으로 한 개가 정해지지 않았을 때. 후보가 있으면 고르게 하고 없으면 다시 입력하게 한다. */
+export function candidatesView(input, candidates, pickId, retryId) {
+  if (candidates.length === 0) {
+    return view(
+      `'${input}'에 맞는 아이템이 없습니다. 이름의 앞부분을 입력해 주세요(예: 낙지). 거래 기록이 있는 아이템만 찾을 수 있습니다.`,
+      [row(button(retryId, "다시 입력", PRIMARY), menuButton())],
+    );
+  }
+  return view(`'${input}'로 시작하는 아이템 ${candidates.length}개입니다. 하나를 골라 주세요.`, [
+    row(
+      select(
+        pickId,
+        "아이템 선택",
+        candidates.map((name) => ({ label: name.slice(0, 100), value: name })),
+      ),
+    ),
+    row(button(retryId, "다시 입력"), menuButton()),
+  ]);
+}
+
+export function favoritesView(status) {
+  const components = [];
+  if (status.items.length > 0) {
+    components.push(
+      row(
+        select(
+          "f:open",
+          "자세히 볼 아이템 선택",
+          status.items.map((item) => ({
+            label: item.name.slice(0, 100),
+            value: item.name,
+            description: item.targetPrice ? `목표 ${won(item.targetPrice)}` : "목표가 없음",
+          })),
+        ),
+      ),
+    );
+  }
+  components.push(row(button("f:add", "추가", PRIMARY), button("m:fav", "새로고침"), menuButton()));
+  return view(favoritesStatusMessages(status)[0], components);
+}
+
+/** 즐겨찾기 하나. 시세와 목표 가격, 목표 설정·삭제 버튼. */
+export function favoriteDetailView(name, summary, targetPrice) {
+  const lines = [summary ? marketText(summary) : `**${name}**\n최근 거래 기록이 없습니다.`];
+  if (targetPrice) {
+    const price = summary?.lowest?.price;
+    const reached = price != null && price <= targetPrice;
+    lines.push(`목표 **${won(targetPrice)}** · ${reached ? "지금 목표 이하입니다" : "아직 목표보다 비쌉니다"}`);
+  } else {
+    lines.push("목표가를 정하면 그 가격 이하일 때 DM으로 알려 드립니다.");
+  }
+  const components = [
+    row(
+      button(`f:t:${name}`, targetPrice ? "목표가 바꾸기" : "목표가 정하기", PRIMARY),
+      button(`f:off:${name}`, "목표가 끄기", SECONDARY, { disabled: !targetPrice }),
+      button(`f:del:${name}`, "즐겨찾기에서 삭제", DANGER),
+      button("f:list", "← 목록"),
+    ),
+  ];
+  if (summary) components.push(row(...priceLinks(summary.links)));
+  return view(lines.join("\n"), components);
+}
+
+const CHUNK = 15;
+
+export function chunkEntries(entries) {
+  const chunks = [];
+  for (let i = 0; i < entries.length; i += CHUNK) chunks.push(entries.slice(i, i + CHUNK));
+  return chunks;
+}
+
+/** 아르바이트 알림. 선택 메뉴는 25개까지라 항목을 나눠 여러 개로 보여 주고, 선택한 항목이 켜진다. */
+export function arbeitView(entries, subscribed) {
+  const on = new Set(subscribed);
+  const lines = [`**아르바이트 알림** (${subscribed.length}개)`];
+  const chosen = entries.filter((entry) => on.has(entry.id));
+  if (chosen.length === 0) {
+    lines.push("구독한 항목이 없습니다. 아래 메뉴에서 알림을 받을 항목을 고르세요.");
+  } else {
+    lines.push(...chosen.map((entry) => `• ${entry.label} · 에린 ${entry.report}시 이후`));
+  }
+  lines.push("-# 메뉴에서 체크한 항목만 알림이 옵니다. 에린 시간으로 보고할 수 있게 되면 36분마다 알려 드립니다.");
+
+  const menus = chunkEntries(entries).map((chunk, index) =>
+    row(
+      select(
+        `a:${index}`,
+        `${chunk[0].group} ~ ${chunk[chunk.length - 1].group}`,
+        chunk.map((entry) => ({
+          label: entry.label.slice(0, 100),
+          value: entry.id,
+          description: `에린 ${entry.report}시 이후 보고`,
+          default: on.has(entry.id),
+        })),
+        { min: 0, max: chunk.length },
+      ),
+    ),
+  );
+  return view(lines.join("\n"), [
+    ...menus,
+    row(button("a:all", "전체 켜기", SUCCESS), button("a:none", "전체 끄기"), menuButton()),
+  ]);
+}
+
+export const QUIET_PRESETS = [
+  ["off", "조용한 시간 없음", null],
+  ["22-7", "22시~7시", { start: 22, end: 7 }],
+  ["23-7", "23시~7시", { start: 23, end: 7 }],
+  ["0-8", "0시~8시", { start: 0, end: 8 }],
+  ["1-9", "1시~9시", { start: 1, end: 9 }],
+];
+
+export function describeSettings(settings) {
+  const parts = [settings.digest ? "한 메시지로 묶어 받기" : "항목마다 따로 받기"];
+  parts.push(
+    settings.quiet ? `조용한 시간 ${settings.quiet.start}시~${settings.quiet.end}시` : "조용한 시간 없음",
+  );
+  if (settings.disabledReason === "dm-failed") {
+    parts.push("DM을 보낼 수 없어 멈춤 (DM을 허용한 뒤 일시정지를 끄세요)");
+  } else if (settings.paused) {
+    parts.push("일시정지");
+  }
+  return parts.join(" · ");
+}
+
+/** 알림 설정. 아르바이트와 즐겨찾기 알림이 함께 따른다. */
+export function settingsView(settings) {
+  const current = settings.quiet
+    ? QUIET_PRESETS.find(([, , quiet]) => quiet && quiet.start === settings.quiet.start && quiet.end === settings.quiet.end)
+    : QUIET_PRESETS[0];
+  const options = QUIET_PRESETS.map(([value, label]) => ({
+    label,
+    value,
+    default: current ? current[0] === value : false,
+  }));
+  if (!current) {
+    options.unshift({
+      label: `직접 설정 ${settings.quiet.start}시~${settings.quiet.end}시`,
+      value: "keep",
+      default: true,
+    });
+  }
+  return view(
+    [
+      "**알림 설정**",
+      describeSettings(settings),
+      "-# 시간은 한국 시각 기준이며 아르바이트와 목표 가격 알림 모두에 적용됩니다.",
+    ].join("\n"),
+    [
+      row(
+        button("s:digest", settings.digest ? "묶어서 받기: 켜짐" : "묶어서 받기: 꺼짐", settings.digest ? SUCCESS : SECONDARY),
+        button("s:pause", settings.paused ? "일시정지: 켜짐" : "일시정지: 꺼짐", settings.paused ? DANGER : SECONDARY),
+      ),
+      row(select("s:quiet", "조용한 시간", options)),
+      row(button("s:custom", "조용한 시간 직접 입력"), menuButton()),
+    ],
+  );
+}
+
+export function meView(user, favoriteCount) {
+  return view(
+    [
+      "**내 정보**",
+      `즐겨찾기 ${favoriteCount}개 · 아르바이트 ${user.arbeit.length}개 · 동의 ${relativeTime(user.consentedAt)}`,
+      "-# 삭제하면 설정, 구독, 즐겨찾기가 모두 지워지며 되돌릴 수 없습니다.",
+    ].join("\n"),
+    [row(button("me:ask", "모든 정보 삭제", DANGER), menuButton())],
+  );
+}
+
+export function confirmDeleteView() {
+  return view("설정, 구독, 즐겨찾기를 모두 삭제합니다. 정말 삭제할까요?", [
+    row(button("me:del", "삭제", DANGER), button("me:cancel", "취소")),
+  ]);
+}
+
+export function deletedView() {
+  return view("저장된 정보를 모두 삭제했습니다.", [row(button("m:menu", "메뉴로", PRIMARY))]);
+}
+
+export function noticeView(text, ...buttons) {
+  return view(text, [row(...buttons, menuButton())]);
+}

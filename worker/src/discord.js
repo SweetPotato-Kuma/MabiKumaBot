@@ -46,3 +46,19 @@ export function isDmBlocked(result) {
 export function isChannelGone(result) {
   return !result.ok && (result.status === 404 || result.code === 10003);
 }
+
+/**
+ * 처음 응답을 "처리 중"으로 보낸 상호작용의 메시지를 나중에 실제 내용으로 바꾼다.
+ * 상호작용 토큰이 주소에 들어 있어 별도 인증이 필요 없다(15분 안에만 쓸 수 있다).
+ */
+export async function editOriginal(env, interaction, view) {
+  const response = await fetch(
+    `${API}/webhooks/${env.DISCORD_APPLICATION_ID}/${interaction.token}/messages/@original`,
+    {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content: view.content, components: view.components ?? [] }),
+    },
+  );
+  return response.ok;
+}

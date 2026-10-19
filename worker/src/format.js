@@ -10,7 +10,7 @@ export const relativeTime = (ms) => `<t:${seconds(ms)}:R>`;
 
 export const dataNote = (ms) => `-# 넥슨 경매장 기준 ${relativeTime(ms)}`;
 
-const SETTINGS_HINT = "-# 알림 방식은 /구마 알림설정 에서 바꿀 수 있습니다.";
+const SETTINGS_HINT = "-# 알림 방식은 /마비쿠마 의 알림 설정에서 바꿀 수 있습니다.";
 
 /** 머리말, 줄 목록, 꼬리말을 길이에 맞게 여러 통으로 나눈다. 줄은 쪼개지 않는다. */
 export function chunkMessages(header, lines, footer) {
@@ -64,10 +64,10 @@ export function favoriteAlertMessages(alert) {
   );
 }
 
-/** `/구마 즐겨찾기 목록` 응답. 항목이 많으면 줄이 길어지지 않게 링크를 뺀다. */
+/** 즐겨찾기 목록 화면의 본문. 항목이 많으면 줄이 길어지지 않게 링크를 뺀다. */
 export function favoritesStatusMessages(status) {
   if (status.items.length === 0) {
-    return ["즐겨찾기가 없습니다. `/구마 즐겨찾기 추가`로 아이템을 고르세요."];
+    return ["즐겨찾기가 없습니다. 아래 추가 버튼으로 아이템을 더하세요."];
   }
   const withLinks = status.items.length <= 8;
   const lines = status.items.map((item) => {
