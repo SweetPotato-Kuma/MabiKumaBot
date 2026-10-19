@@ -9,6 +9,17 @@ preview_urls = false
 [observability]
 enabled = true
 
+# 1분마다 지난 1분 사이에 보고 가능해진 아르바이트를 알린다.
+[triggers]
+crons = ["* * * * *"]
+
+# 사용자 설정과 구독은 사이트 Worker 의 BotService 를 거쳐 읽고 쓴다. 이 봇은 저장소가 없다.
+# 사이트 Worker 를 BotService 가 들어 있는 판으로 먼저 배포해야 이 봇을 배포할 수 있다.
+[[services]]
+binding = "SITE"
+service = "mabikuma-api"
+entrypoint = "BotService"
+
 [vars]
 # 공개 식별자와 서명 확인용 공개 키라 비밀이 아니다. 봇 토큰(DISCORD_BOT_TOKEN)은 여기에 적지 않고 시크릿으로 넣는다:
 #   npx wrangler secret bulk .dev.vars   (또는 npx wrangler secret put DISCORD_BOT_TOKEN)
