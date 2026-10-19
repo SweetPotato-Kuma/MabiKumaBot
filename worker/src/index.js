@@ -1,8 +1,11 @@
-import { handleCommand } from "./commands.js";
+import { runArbeitAlerts } from "./alerts.js";
+import { handleAutocomplete, handleCommand, handleComponent } from "./commands.js";
 import { readVerifiedBody } from "./verify.js";
 
 const PING = 1;
 const APPLICATION_COMMAND = 2;
+const MESSAGE_COMPONENT = 3;
+const AUTOCOMPLETE = 4;
 const PONG = 1;
 
 function json(value, status = 200) {
@@ -30,12 +33,27 @@ export default {
       return new Response("Bad Request", { status: 400 });
     }
 
-    if (interaction.type === PING) {
-      return json({ type: PONG });
+    switch (interaction.type) {
+      case PING:
+        return json({ type: PONG });
+      case APPLICATION_COMMAND:
+        return json(await handleCommand(interaction, env));
+      case MESSAGE_COMPONENT:
+        return json(await handleComponent(interaction, env));
+      case AUTOCOMPLETE:
+        return json(await handleAutocomplete(interaction, env));
+      default:
+        return json({ type: 4, data: { content: "아직 지원하지 않는 동작입니다.", flags: 64 } });
     }
-    if (interaction.type === APPLICATION_COMMAND) {
-      return json(handleCommand(interaction));
-    }
-    return json({ type: 4, data: { content: "아직 지원하지 않는 동작입니다.", flags: 64 } });
+  },
+
+  /** 1분마다 깨어나 지난 1분 사이에 보고 가능해진 아르바이트를 알린다. */
+  async scheduled(controller, env, ctx) {
+    ctx.waitUntil(
+      runArbeitAlerts(env, controller.scheduledTime).then(
+        (summary) => console.log(JSON.stringify({ arbeit: summary })),
+        (error) => console.error(JSON.stringify({ arbeit: String(error?.message ?? error) })),
+      ),
+    );
   },
 };
