@@ -1,4 +1,5 @@
 import { erinClock, formatErinClock, formatShopReset, msUntilShopReset } from "./erin.js";
+import { favoritesStatusMessages, marketText, won } from "./format.js";
 
 const SUBCOMMAND = 1;
 const SUBCOMMAND_GROUP = 2;
@@ -11,6 +12,7 @@ const CHANNEL_MESSAGE = 4;
 const UPDATE_MESSAGE = 7;
 const AUTOCOMPLETE_RESULT = 8;
 const EPHEMERAL = 64;
+const MAX_TARGET = 10_000_000_000;
 
 /** 동의 문구가 바뀌면 이 값과 사이트의 개인정보처리방침을 함께 고친다. */
 export const CONSENT_VERSION = "2026-10-19";
@@ -23,6 +25,14 @@ const entryOption = {
   required: true,
   autocomplete: true,
 };
+
+const itemOption = (description) => ({
+  type: STRING,
+  name: "아이템",
+  description,
+  required: true,
+  autocomplete: true,
+});
 
 /** 디스코드에 등록하는 명령 정의. 루트 명령 `/구마` 하나에 서브명령을 모은다. */
 export const COMMANDS = [
@@ -39,15 +49,36 @@ export const COMMANDS = [
       {
         type: SUBCOMMAND,
         name: "시세",
-        description: "아이템의 최근 거래 시세",
+        description: "아이템의 현재 최저가와 최근 거래 시세",
+        options: [itemOption("아이템 이름")],
+      },
+      {
+        type: SUBCOMMAND_GROUP,
+        name: "즐겨찾기",
+        description: "자주 보는 아이템과 목표 가격 알림",
         options: [
           {
-            type: STRING,
-            name: "아이템",
-            description: "아이템 이름",
-            required: true,
-            autocomplete: true,
+            type: SUBCOMMAND,
+            name: "추가",
+            description: "즐겨찾기에 더하거나 목표 가격 바꾸기",
+            options: [
+              itemOption("아이템 이름"),
+              {
+                type: INTEGER,
+                name: "목표가",
+                description: "개당 이 가격 이하가 되면 알림 (0이면 알림 끔)",
+                min_value: 0,
+                max_value: MAX_TARGET,
+              },
+            ],
           },
+          {
+            type: SUBCOMMAND,
+            name: "삭제",
+            description: "즐겨찾기에서 빼기",
+            options: [itemOption("즐겨찾기에서 뺄 아이템")],
+          },
+          { type: SUBCOMMAND, name: "목록", description: "즐겨찾기의 현재 최저가와 목표 가격" },
         ],
       },
       {
@@ -55,35 +86,35 @@ export const COMMANDS = [
         name: "알바",
         description: "아르바이트 보고 가능 알림",
         options: [
-          { type: SUBCOMMAND, name: "목록", description: "내 알림 설정과 구독한 항목" },
+          { type: SUBCOMMAND, name: "목록", description: "내가 구독한 항목" },
           { type: SUBCOMMAND, name: "추가", description: "알림을 받을 항목 추가", options: [entryOption] },
           { type: SUBCOMMAND, name: "삭제", description: "알림을 끌 항목 삭제", options: [entryOption] },
           { type: SUBCOMMAND, name: "전체켜기", description: "모든 항목을 구독" },
           { type: SUBCOMMAND, name: "전체끄기", description: "모든 구독을 해제" },
+        ],
+      },
+      {
+        type: SUBCOMMAND,
+        name: "알림설정",
+        description: "알림을 받는 방식 (값을 주지 않으면 현재 설정을 보여 줌)",
+        options: [
+          { type: BOOLEAN, name: "묶어서받기", description: "같은 시각 알림을 한 메시지로 받기" },
+          { type: BOOLEAN, name: "일시정지", description: "모든 알림을 잠시 멈추기" },
           {
-            type: SUBCOMMAND,
-            name: "설정",
-            description: "알림 방식 설정",
-            options: [
-              { type: BOOLEAN, name: "묶어서받기", description: "같은 시각 알림을 한 메시지로 받기" },
-              { type: BOOLEAN, name: "일시정지", description: "알림을 잠시 멈추기" },
-              {
-                type: INTEGER,
-                name: "조용한시작",
-                description: "알림을 받지 않을 시간의 시작(한국 시각, 0~23)",
-                min_value: 0,
-                max_value: 23,
-              },
-              {
-                type: INTEGER,
-                name: "조용한끝",
-                description: "알림을 받지 않을 시간의 끝(한국 시각, 0~23)",
-                min_value: 0,
-                max_value: 23,
-              },
-              { type: BOOLEAN, name: "조용한시간끄기", description: "조용한 시간 설정을 지우기" },
-            ],
+            type: INTEGER,
+            name: "조용한시작",
+            description: "알림을 받지 않을 시간의 시작(한국 시각, 0~23)",
+            min_value: 0,
+            max_value: 23,
           },
+          {
+            type: INTEGER,
+            name: "조용한끝",
+            description: "알림을 받지 않을 시간의 끝(한국 시각, 0~23)",
+            min_value: 0,
+            max_value: 23,
+          },
+          { type: BOOLEAN, name: "조용한시간끄기", description: "조용한 시간 설정을 지우기" },
         ],
       },
       {
@@ -91,7 +122,11 @@ export const COMMANDS = [
         name: "내정보",
         description: "봇에 저장된 내 정보",
         options: [
-          { type: SUBCOMMAND, name: "삭제", description: "저장된 설정과 구독을 모두 삭제" },
+          {
+            type: SUBCOMMAND,
+            name: "삭제",
+            description: "저장된 설정, 구독, 즐겨찾기를 모두 삭제",
+          },
         ],
       },
     ],
@@ -108,9 +143,8 @@ function reply(content, { ephemeral = true, components } = {}) {
 }
 
 const button = (customId, label, style) => ({ type: 2, custom_id: customId, label, style });
+const linkButton = (label, url) => ({ type: 2, style: 5, label, url });
 const row = (...buttons) => ({ type: 1, components: buttons });
-
-const won = (value) => `${Number(value).toLocaleString("ko-KR")}`;
 
 /** 명령 이름 경로, 입력값, 자동완성 중인 입력을 꺼낸다. */
 export function parseInteraction(interaction) {
@@ -134,9 +168,9 @@ export function userIdOf(interaction) {
 function consentPrompt() {
   return reply(
     [
-      "**개인 알림을 켜려면 동의가 필요합니다.**",
-      "저장하는 정보: 디스코드 사용자 번호, 동의 시점, 알림 설정, 구독한 아르바이트 항목",
-      "쓰는 곳: 아르바이트 알림을 DM으로 보내는 데에만 씁니다.",
+      "**개인 기능을 켜려면 동의가 필요합니다.**",
+      "저장하는 정보: 디스코드 사용자 번호, 동의 시점, 알림 설정, 구독한 아르바이트 항목, 즐겨찾기와 목표 가격",
+      "쓰는 곳: 알림을 DM으로 보내는 데에만 씁니다.",
       "지우는 방법: `/구마 내정보 삭제`",
       `자세한 내용: ${PRIVACY_URL}`,
     ].join("\n"),
@@ -157,20 +191,12 @@ export function marketReply(summary) {
   if (!summary) {
     return reply("최근 거래 기록이 없습니다. 이름을 자동완성에서 골라 주세요.");
   }
-  const lines = [`**${summary.name}**`];
-  if (summary.day) {
-    const d = summary.day;
-    lines.push(
-      `최근 24시간 거래 ${won(d.n)}건 · 수량 ${won(d.qty)}`,
-      `중위가 **${won(d.mid)}** · 평균 ${won(d.avg)} · 최저 ${won(d.lo)} · 최고 ${won(d.hi)}`,
-    );
-  } else {
-    lines.push("최근 24시간 거래가 없습니다.");
-  }
-  if (summary.series.length > 0) {
-    lines.push(`최근 7일 중위가: ${summary.series.map((day) => `${day.date.slice(5)} ${won(day.mid)}`).join(" · ")}`);
-  }
-  return reply(lines.join("\n"), { ephemeral: false });
+  return reply(marketText(summary), {
+    ephemeral: false,
+    components: [
+      row(linkButton("아이템 페이지", summary.links.item), linkButton("경매장에서 보기", summary.links.auction)),
+    ],
+  });
 }
 
 function describeSettings(settings) {
@@ -179,7 +205,7 @@ function describeSettings(settings) {
     parts.push(`조용한 시간 ${settings.quiet.start}시~${settings.quiet.end}시`);
   }
   if (settings.disabledReason === "dm-failed") {
-    parts.push("DM을 보낼 수 없어 멈춤 (DM을 허용하고 `/구마 알바 설정 일시정지:False`)");
+    parts.push("DM을 보낼 수 없어 멈춤 (DM을 허용하고 `/구마 알림설정 일시정지:False`)");
   } else if (settings.paused) {
     parts.push("일시정지");
   }
@@ -245,13 +271,42 @@ async function arbeitCommand(interaction, env, sub, values) {
     await env.SITE.changeArbeitSubs(id, sub === "추가" ? { add: [entry.id] } : { remove: [entry.id] });
     return reply(sub === "추가" ? `**${entry.label}** 알림을 켰습니다.` : `**${entry.label}** 알림을 껐습니다.`);
   }
-  if (sub === "설정") {
-    return settingsCommand(id, user, values, env);
+  return reply("아직 지원하지 않는 명령입니다.");
+}
+
+async function favoritesCommand(interaction, env, sub, values) {
+  const id = userIdOf(interaction);
+  if (!(await env.SITE.getUser(id))) {
+    return consentPrompt();
+  }
+
+  if (sub === "목록") {
+    const messages = favoritesStatusMessages(await env.SITE.favoritesStatus(id));
+    return reply(messages[0]);
+  }
+  const name = String(values.아이템 ?? "").trim();
+  if (sub === "삭제") {
+    await env.SITE.removeFavorite(id, name);
+    return reply(`**${name}** 즐겨찾기를 뺐습니다.`);
+  }
+  if (sub === "추가") {
+    const favorites = await env.SITE.addFavorite(id, name, values.목표가);
+    const saved = favorites.find((favorite) => favorite.name === name);
+    const target = saved?.targetPrice
+      ? `개당 **${won(saved.targetPrice)}** 이하가 되면 DM으로 알립니다.`
+      : "목표가를 정하면 그 가격 이하일 때 알려 드립니다.";
+    return reply(`**${name}** 즐겨찾기 (${favorites.length}개)\n${target}`);
   }
   return reply("아직 지원하지 않는 명령입니다.");
 }
 
-async function settingsCommand(id, user, values, env) {
+async function settingsCommand(interaction, env, values) {
+  const id = userIdOf(interaction);
+  const user = await env.SITE.getUser(id);
+  if (!user) {
+    return consentPrompt();
+  }
+
   const patch = {};
   if (values.묶어서받기 !== undefined) patch.digest = values.묶어서받기;
   if (values.일시정지 !== undefined) patch.paused = values.일시정지;
@@ -279,29 +334,37 @@ async function deleteCommand(interaction, env) {
   if (!user) {
     return reply("저장된 정보가 없습니다.");
   }
-  return reply("설정과 구독을 모두 삭제합니다. 되돌릴 수 없습니다.", {
+  return reply("설정, 구독, 즐겨찾기를 모두 삭제합니다. 되돌릴 수 없습니다.", {
     components: [row(button("me:delete", "모두 삭제", 4), button("me:cancel", "취소", 2))],
   });
 }
 
 export async function handleCommand(interaction, env, now = Date.now()) {
   const { path, values } = parseInteraction(interaction);
-  try {
-    if (path[0] === "구마" && path[1] === "에린") {
-      return erinReply(now);
-    }
-    if (path[0] === "구마" && path[1] === "시세") {
-      return marketReply(await env.SITE.marketSummary(String(values.아이템 ?? "")));
-    }
-    if (path[0] === "구마" && path[1] === "알바") {
-      return await arbeitCommand(interaction, env, path[2], values);
-    }
-    if (path[0] === "구마" && path[1] === "내정보" && path[2] === "삭제") {
-      return await deleteCommand(interaction, env);
-    }
+  if (path[0] !== "구마") {
     return reply("아직 지원하지 않는 명령입니다.");
-  } catch {
-    return reply(ERROR_TEXT);
+  }
+  try {
+    switch (path[1]) {
+      case "에린":
+        return erinReply(now);
+      case "시세":
+        return marketReply(await env.SITE.marketSummary(String(values.아이템 ?? "")));
+      case "알바":
+        return await arbeitCommand(interaction, env, path[2], values);
+      case "즐겨찾기":
+        return await favoritesCommand(interaction, env, path[2], values);
+      case "알림설정":
+        return await settingsCommand(interaction, env, values);
+      case "내정보":
+        return path[2] === "삭제" ? await deleteCommand(interaction, env) : reply("아직 지원하지 않는 명령입니다.");
+      default:
+        return reply("아직 지원하지 않는 명령입니다.");
+    }
+  } catch (error) {
+    // 사이트 Worker 가 사용자에게 보여도 되는 이유(한도, 잘못된 입력)를 던지면 그대로 알려 준다.
+    const message = String(error?.message ?? "");
+    return reply(/즐겨찾기|목표 가격|거래 기록|동의/.test(message) ? message : ERROR_TEXT);
   }
 }
 
@@ -313,7 +376,7 @@ export async function handleComponent(interaction, env) {
     switch (interaction?.data?.custom_id) {
       case "consent:agree":
         await env.SITE.registerUser(id, CONSENT_VERSION);
-        return done("동의했습니다. `/구마 알바 추가`로 알림을 받을 항목을 고르세요.");
+        return done("동의했습니다. `/구마 즐겨찾기 추가`나 `/구마 알바 추가`로 알림을 받을 대상을 고르세요.");
       case "me:delete":
         await env.SITE.deleteUser(id);
         return done("저장된 정보를 모두 삭제했습니다.");
@@ -329,7 +392,11 @@ export async function handleComponent(interaction, env) {
 
 const choices = (items) => ({
   type: AUTOCOMPLETE_RESULT,
-  data: { choices: items.slice(0, 25).map(({ name, value }) => ({ name: name.slice(0, 100), value: value.slice(0, 100) })) },
+  data: {
+    choices: items
+      .slice(0, 25)
+      .map(({ name, value }) => ({ name: name.slice(0, 100), value: value.slice(0, 100) })),
+  },
 });
 
 /** 자동완성. 실패해도 입력을 막지 않도록 빈 목록을 돌려준다. */
@@ -337,8 +404,16 @@ export async function handleAutocomplete(interaction, env) {
   const { path, focused } = parseInteraction(interaction);
   const query = String(focused?.value ?? "");
   try {
-    if (path[1] === "시세") {
+    if (path[1] === "시세" || (path[1] === "즐겨찾기" && path[2] === "추가")) {
       return choices((await env.SITE.searchItems(query)).map((name) => ({ name, value: name })));
+    }
+    if (path[1] === "즐겨찾기" && path[2] === "삭제") {
+      const favorites = await env.SITE.listFavorites(userIdOf(interaction));
+      return choices(
+        favorites
+          .filter((favorite) => favorite.name.includes(query))
+          .map((favorite) => ({ name: favorite.name, value: favorite.name })),
+      );
     }
     if (path[1] === "알바") {
       let entries = await env.SITE.searchArbeitEntries(query);
@@ -354,3 +429,4 @@ export async function handleAutocomplete(interaction, env) {
   }
   return choices([]);
 }
+
