@@ -221,7 +221,7 @@ describe("즐겨찾기", () => {
     const result = await run(site, click("m:fav"));
     assert.equal(result.initial.type, 6);
     assert.match(result.edit.content, /즐겨찾기가 없습니다/);
-    assert.deepEqual(ids(result.edit), ["f:add", "m:fav", "m:menu"]);
+    assert.deepEqual(ids(result.edit), ["f:add", "f:imp", "m:fav", "m:menu"]);
   });
 
   it("목록은 선택 메뉴로 항목을 고르게 한다", async () => {
@@ -420,7 +420,8 @@ describe("내 정보", () => {
   it("저장된 정보를 요약해서 보여 준다", async () => {
     const { view } = await run(site, click("m:me"));
     assert.match(view.content, /즐겨찾기 1개 · 아르바이트 1개 · 동의 <t:\d+:R>/);
-    assert.deepEqual(ids(view), ["me:ask", "m:menu"]);
+    assert.deepEqual(ids(view), ["me:link", "me:ask", "m:menu"]);
+    assert.match(view.content, /사이트 계정 연결 안 됨/);
   });
 
   it("확인 단추를 눌러야 지우고 취소하면 그대로다", async () => {
@@ -428,7 +429,7 @@ describe("내 정보", () => {
     assert.deepEqual(ids(ask.view), ["me:del", "me:cancel"]);
     assert.equal(site.users.has(ALICE), true);
 
-    assert.deepEqual(ids((await run(site, click("me:cancel"))).view), ["me:ask", "m:menu"]);
+    assert.deepEqual(ids((await run(site, click("me:cancel"))).view), ["me:link", "me:ask", "m:menu"]);
     assert.equal(site.users.has(ALICE), true);
 
     const done = await run(site, click("me:del"));
@@ -471,5 +472,92 @@ describe("오류", () => {
   it("알 수 없는 상호작용은 지원하지 않는다고 답한다", async () => {
     const result = await run(site, { type: 99, member: { user: { id: ALICE } }, data: {} });
     assert.match(result.view.content, /지원하지 않는/);
+  });
+});
+
+describe("사이트 계정 연결", () => {
+  beforeEach(async () => {
+    await register();
+    site.items = ["낙지"];
+  });
+
+  it("연결 코드를 받으면 본인에게만 보이는 새 메시지로 코드를 보여 준다", async () => {
+    const { initial, view } = await run(site, click("me:link"));
+
+    assert.equal(initial.type, 4);
+    assert.equal(view.flags, 64);
+    assert.match(view.content, /`ABCD-EFGH`/);
+    assert.match(view.content, /10분 안에 한 번만/);
+    assert.deepEqual(site.calls.find((c) => c[0] === "createLinkCode"), ["createLinkCode", ALICE]);
+    assert.equal(componentsOf(view)[0].style, 5);
+  });
+
+  it("동의하지 않은 사용자는 코드를 받기 전에 동의 화면을 본다", async () => {
+    const other = fakeSite();
+    const result = await run(other, click("me:link"));
+    assert.match(result.view.content, /동의가 필요합니다/);
+    assert.ok(find(result.view, "c:ok:me"));
+    assert.equal(other.calls.some((c) => c[0] === "createLinkCode"), false);
+  });
+
+  it("연결된 사용자는 내 정보에서 연결 해제를 할 수 있다", async () => {
+    site.linked = true;
+    const view = (await run(site, click("m:me"))).view;
+    assert.match(view.content, /사이트 계정 연결됨/);
+    assert.deepEqual(ids(view), ["me:unlink", "me:ask", "m:menu"]);
+
+    const done = await run(site, click("me:unlink"));
+    assert.deepEqual(site.calls.find((c) => c[0] === "unlinkDiscord"), ["unlinkDiscord", ALICE]);
+    assert.match(done.view.content, /사이트 계정 연결 안 됨/);
+  });
+
+  it("연결하지 않았으면 가져오기 전에 연결 코드를 받으라고 안내한다", async () => {
+    const result = await run(site, click("f:imp"));
+
+    assert.equal(result.initial.type, 4);
+    assert.match(result.view.content, /먼저 연결/);
+    assert.ok(find(result.view, "me:link"));
+    assert.equal(site.calls.some((c) => c[0] === "importSiteFavorites"), false);
+  });
+
+  it("연결했으면 사이트 즐겨찾기를 가져와 결과를 보여 준다", async () => {
+    site.linked = true;
+    site.importResult = { added: ["낙지", "마나 허브"], existing: 1, unknown: ["마나", "문"], full: 0, complex: 3 };
+
+    const result = await run(site, click("f:imp"));
+
+    assert.equal(result.initial.type, 6);
+    assert.deepEqual(site.calls.find((c) => c[0] === "importSiteFavorites"), ["importSiteFavorites", ALICE]);
+    assert.match(result.edit.content, /사이트 즐겨찾기 2개를 가져왔습니다/);
+    assert.match(result.edit.content, /• 낙지\n• 마나 허브/);
+    assert.match(result.edit.content, /이미 있는 항목 1개/);
+    assert.match(result.edit.content, /정확히 맞지 않아 건너뜀: 마나, 문/);
+    assert.match(result.edit.content, /상세 조건이 있는 검색 3개는 사이트에서만/);
+    assert.deepEqual(ids(result.edit), ["m:fav", "m:menu"]);
+  });
+
+  it("가져올 것이 없으면 그렇게 알리고 해당하지 않는 줄은 보이지 않는다", async () => {
+    site.linked = true;
+    const result = await run(site, click("f:imp"));
+    assert.match(result.edit.content, /가져온 즐겨찾기가 없습니다/);
+    assert.doesNotMatch(result.edit.content, /이미 있는|건너뜀|가득|상세 조건/);
+  });
+
+  it("가득 차서 못 가져온 개수를 알려 준다", async () => {
+    site.linked = true;
+    site.importResult = { added: ["낙지"], existing: 0, unknown: [], full: 4, complex: 0 };
+    assert.match((await run(site, click("f:imp"))).edit.content, /가득 차 4개는 가져오지 못했습니다/);
+  });
+
+  it("동의하지 않은 사용자가 가져오기를 누르면 동의 화면으로 간다", async () => {
+    const other = fakeSite();
+    const result = await run(other, click("f:imp"));
+    assert.match(result.view.content, /동의가 필요합니다/);
+  });
+
+  it("가져오는 중 사이트가 실패하면 원래 메시지를 안내 문구로 바꾼다", async () => {
+    site.linked = true;
+    site.importError = new Error("db exploded");
+    assert.match((await run(site, click("f:imp"))).edit.content, /처리하지 못했습니다/);
   });
 });

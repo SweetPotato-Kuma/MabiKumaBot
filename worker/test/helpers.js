@@ -125,6 +125,25 @@ export function fakeSite() {
         })),
       };
     },
+    linked: false,
+    importResult: { added: [], existing: 0, unknown: [], full: 0, complex: 0 },
+    async linkStatus() {
+      return { linked: site.linked };
+    },
+    async createLinkCode(id) {
+      calls.push(["createLinkCode", id]);
+      return { code: "ABCD-EFGH", expiresAt: NOW + 600_000 };
+    },
+    async unlinkDiscord(id) {
+      calls.push(["unlinkDiscord", id]);
+      site.linked = false;
+      return { unlinked: true };
+    },
+    async importSiteFavorites(id) {
+      calls.push(["importSiteFavorites", id]);
+      if (site.importError) throw site.importError;
+      return site.importResult;
+    },
     async dueArbeitAlerts(from, to) {
       calls.push(["dueArbeitAlerts", from, to]);
       return site.due;
