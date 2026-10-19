@@ -1,0 +1,16 @@
+name = "mabikuma-bot"
+main = "src/index.js"
+compatibility_date = "2026-09-22"
+
+# 디스코드가 이 주소로 명령을 보낸다(Interactions Endpoint URL).
+workers_dev = true
+preview_urls = false
+
+[observability]
+enabled = true
+
+[vars]
+# 공개 식별자와 서명 확인용 공개 키라 비밀이 아니다. 봇 토큰(DISCORD_BOT_TOKEN)은 여기에 적지 않고 시크릿으로 넣는다:
+#   npx wrangler secret bulk .dev.vars   (또는 npx wrangler secret put DISCORD_BOT_TOKEN)
+DISCORD_APPLICATION_ID = "1561556529654796408"
+DISCORD_PUBLIC_KEY = "dff90cb1ad238f14685634e4daa88e8fe3884f03dcfebfc9dc41a943b3dfba12"
