@@ -7,3 +7,7 @@ main.log
 data/*.json
 !data/.gitkeep
 runtime/
+
+# Cloudflare Worker
+.dev.vars
+.wrangler/
