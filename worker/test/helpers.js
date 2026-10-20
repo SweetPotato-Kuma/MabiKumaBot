@@ -2,7 +2,7 @@ import { handleInteraction } from "../src/commands.js";
 
 export const ALICE = "111111111111111111";
 export const BOB = "222222222222222222";
-export const NOW = Date.parse("2026-10-19T14:20:00+09:00");
+export const NOW = Date.parse("2026-10-20T14:20:00+09:00");
 
 /** 두 개의 선택 메뉴로 나뉘도록 15개를 넘기는 시간표. 실제 시간표와 모양이 같다. */
 export const ENTRIES = Array.from({ length: 20 }, (_, i) => ({
@@ -13,35 +13,37 @@ export const ENTRIES = Array.from({ length: 20 }, (_, i) => ({
   verified: false,
 }));
 
-const links = (name) => ({
-  item: `https://mabi.spkuma.com/item/${name}?ref=bot`,
-  auction: `https://mabi.spkuma.com/auction?keyword=${name}&exact=1&ref=bot`,
-});
-
-export function summary(name, { price = 4290, mid = 4200 } = {}) {
+const searchResult = (query) => {
+  const ready = Boolean(query.keyword || query.category);
   return {
-    name,
-    day: { n: 100, qty: 200, lo: 1, hi: 9, mid, avg: mid },
-    series: [{ date: "2026-10-19", mid }],
-    lowest: { price, listings: 3, checkedAt: NOW - 60_000 },
-    links: links(name),
+    query,
+    conditions: [],
+    ready,
+    total: ready ? 1 : 0,
+    scanned: 1,
+    truncated: false,
+    checkedAt: NOW,
+    lowest: ready ? 4290 : null,
+    items: ready ? [{ name: "낙지", itemName: "낙지", price: 4290, count: 1, notes: [] }] : [],
   };
-}
+};
 
 /** 사이트 Worker 의 BotService 를 흉내 낸다. 계약은 사이트 저장소의 테스트가 확인한다. */
 export function fakeSite() {
   const users = new Map();
-  const favorites = new Map();
+  const searches = new Map();
   const calls = [];
+  let nextId = 1;
   const site = {
     calls,
     users,
-    favorites,
+    searches,
     items: [],
-    summaries: {},
     due: [],
-    favoriteDue: [],
+    searchDue: [],
     fail: null,
+    linked: false,
+    importResult: { added: [], existing: 0, invalid: 0, full: 0 },
     async getUser(id) {
       if (site.fail) throw site.fail;
       return users.get(id) ?? null;
@@ -59,7 +61,7 @@ export function fakeSite() {
     async deleteUser(id) {
       calls.push(["deleteUser", id]);
       users.delete(id);
-      favorites.delete(id);
+      searches.delete(id);
     },
     async updateSettings(id, patch) {
       calls.push(["updateSettings", id, patch]);
@@ -89,44 +91,8 @@ export function fakeSite() {
     },
     async marketSummary(name) {
       calls.push(["marketSummary", name]);
-      return site.summaries[name] ?? null;
+      return null;
     },
-    async listFavorites(id) {
-      return favorites.get(id) ?? [];
-    },
-    async addFavorite(id, name, target) {
-      calls.push(["addFavorite", id, name, target]);
-      if (name === "너무많음") throw new Error("즐겨찾기는 20개까지 둘 수 있습니다.");
-      const list = favorites.get(id) ?? [];
-      const found = list.find((favorite) => favorite.name === name);
-      if (found) {
-        if (target !== undefined) found.targetPrice = target || null;
-      } else {
-        list.push({ name, targetPrice: target || null });
-      }
-      favorites.set(id, list);
-      return list;
-    },
-    async removeFavorite(id, name) {
-      calls.push(["removeFavorite", id, name]);
-      favorites.set(id, (favorites.get(id) ?? []).filter((favorite) => favorite.name !== name));
-    },
-    async favoritesStatus(id) {
-      calls.push(["favoritesStatus", id]);
-      return {
-        checkedAt: NOW,
-        items: (favorites.get(id) ?? []).map((favorite) => ({
-          name: favorite.name,
-          targetPrice: favorite.targetPrice,
-          lowest: { price: 4290, listings: 3 },
-          unavailable: false,
-          day: { mid: 4200 },
-          links: links(favorite.name),
-        })),
-      };
-    },
-    linked: false,
-    importResult: { added: [], existing: 0, unknown: [], full: 0, complex: 0 },
     async linkStatus() {
       return { linked: site.linked };
     },
@@ -139,18 +105,72 @@ export function fakeSite() {
       site.linked = false;
       return { unlinked: true };
     },
-    async importSiteFavorites(id) {
-      calls.push(["importSiteFavorites", id]);
-      if (site.importError) throw site.importError;
+    async importSiteSearches(id) {
+      calls.push(["importSiteSearches", id]);
       return site.importResult;
+    },
+    async searchAuction(query, options) {
+      calls.push(["searchAuction", query, options]);
+      if (site.searchError) throw site.searchError;
+      return searchResult(query);
+    },
+    async searchCatalog(query) {
+      calls.push(["searchCatalog", query]);
+      return { query, conditions: [], entries: [] };
+    },
+    async addSearchCondition(query, spec) {
+      calls.push(["addSearchCondition", query, spec]);
+      return { ...query, filterKey: "f" };
+    },
+    async removeSearchCondition(query, index) {
+      calls.push(["removeSearchCondition", query, index]);
+      return { ...query, filterKey: "" };
+    },
+    async categoryTree() {
+      return [{ name: "근거리 장비", key: "group:근거리 장비", categories: ["검"] }];
+    },
+    async listSearches(id) {
+      return (searches.get(id) ?? []).map((search) => ({ ...search }));
+    },
+    async saveSearch(id, input) {
+      calls.push(["saveSearch", id, input]);
+      if (input.name === "너무많음") throw new Error("즐겨찾기는 20개까지 둘 수 있습니다.");
+      const list = searches.get(id) ?? [];
+      const { id: searchId, name, targetPrice, ...query } = input;
+      let search = list.find((each) => each.id === searchId);
+      if (!search) {
+        search = { id: nextId++, name, query, targetPrice: targetPrice || null, conditions: [] };
+        list.push(search);
+        searches.set(id, list);
+        return { search, created: true };
+      }
+      Object.assign(search, { name: name ?? search.name, query, targetPrice: targetPrice || null });
+      return { search, created: false };
+    },
+    async removeSearch(id, searchId) {
+      calls.push(["removeSearch", id, searchId]);
+      searches.set(id, (searches.get(id) ?? []).filter((search) => search.id !== searchId));
+      return searches.get(id);
+    },
+    async searchesStatus(id) {
+      calls.push(["searchesStatus", id]);
+      return {
+        checkedAt: NOW,
+        searches: (searches.get(id) ?? []).map((search) => ({ ...search, unavailable: false, lowest: 4290, total: 1, checkedAt: NOW })),
+      };
+    },
+    async searchDetail(id, searchId) {
+      const search = (searches.get(id) ?? []).find((each) => each.id === searchId);
+      if (!search) throw new Error("저장한 검색을 찾지 못했습니다.");
+      return { search, result: searchResult(search.query) };
     },
     async dueArbeitAlerts(from, to) {
       calls.push(["dueArbeitAlerts", from, to]);
       return site.due;
     },
-    async dueFavoriteAlerts(minuteIndex) {
-      calls.push(["dueFavoriteAlerts", minuteIndex]);
-      return site.favoriteDue;
+    async dueSearchAlerts(minuteIndex) {
+      calls.push(["dueSearchAlerts", minuteIndex]);
+      return site.searchDue;
     },
   };
   return site;
@@ -167,13 +187,16 @@ export const slash = (values = {}, user = ALICE) => ({
   },
 });
 
-export const click = (customId, values, user = ALICE) => ({
+/** 단추 누르기. 앞 화면의 카드(embeds)를 넘기면 검색 상태가 이어진다. */
+export const click = (customId, values, user = ALICE, embeds) => ({
   ...base(3, user),
+  ...(embeds ? { message: { embeds } } : {}),
   data: { custom_id: customId, ...(values ? { values } : {}) },
 });
 
-export const submit = (customId, fields, user = ALICE) => ({
+export const submit = (customId, fields, user = ALICE, embeds) => ({
   ...base(5, user),
+  ...(embeds ? { message: { embeds } } : {}),
   data: {
     custom_id: customId,
     components: Object.entries(fields).map(([id, value]) => ({
@@ -190,7 +213,7 @@ export const typing = (value, user = ALICE) => ({
 
 // ---------- 결과 읽기 ----------
 /** 모든 단추와 메뉴를 한 줄로 펼친다. */
-export const componentsOf = (view) => (view?.components ?? []).flatMap((row) => row.components);
+export const componentsOf = (view) => (view?.components ?? []).flatMap((line) => line.components);
 export const find = (view, customId) => componentsOf(view).find((component) => component.custom_id === customId);
 export const ids = (view) => componentsOf(view).map((component) => component.custom_id ?? component.url);
 
@@ -198,12 +221,12 @@ export const ids = (view) => componentsOf(view).map((component) => component.cus
  * 상호작용을 처리하고 결과를 돌려준다. 처리 중으로 먼저 답한 화면은 원래 메시지를 고친 내용(edit)을 함께 준다.
  * 디스코드에 보내는 요청(fetch)은 가로채 기록한다.
  */
-export async function run(site, interaction, { now = NOW, fetchReply } = {}) {
+export async function run(site, interaction, { now = NOW } = {}) {
   const real = globalThis.fetch;
   const edits = [];
   globalThis.fetch = async (url, init) => {
     edits.push({ url: String(url), body: JSON.parse(init.body) });
-    return fetchReply ? fetchReply(String(url)) : new Response("{}", { status: 200 });
+    return new Response("{}", { status: 200 });
   };
   try {
     const initial = await handleInteraction(interaction, { SITE: site, DISCORD_APPLICATION_ID: "app" }, undefined, now);
