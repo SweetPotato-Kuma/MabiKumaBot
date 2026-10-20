@@ -21,6 +21,23 @@ import {
   settingsView,
 } from "./views.js";
 import { editOriginal } from "./discord.js";
+import {
+  deferred,
+  fieldsOf,
+  message,
+  modal,
+  newMessage,
+  parsePrice as parseTarget,
+  update,
+  userIdOf,
+} from "./ui.js";
+
+const DEFERRED_CHANNEL_MESSAGE = 5;
+const DEFERRED_UPDATE = 6;
+const AUTOCOMPLETE_RESULT = 8;
+const EPHEMERAL = 64;
+
+export { userIdOf };
 
 export { CONSENT_VERSION };
 
@@ -30,16 +47,7 @@ const MESSAGE_COMPONENT = 3;
 const AUTOCOMPLETE = 4;
 const MODAL_SUBMIT = 5;
 
-const CHANNEL_MESSAGE = 4;
-const DEFERRED_CHANNEL_MESSAGE = 5;
-const DEFERRED_UPDATE = 6;
-const UPDATE_MESSAGE = 7;
-const AUTOCOMPLETE_RESULT = 8;
-const MODAL = 9;
-const EPHEMERAL = 64;
-
 const STRING = 3;
-const MAX_TARGET = 10_000_000_000;
 const ERROR_TEXT = "처리하지 못했습니다. 잠시 뒤 다시 시도해 주세요.";
 const PERSONAL_TARGETS = new Set(["fav", "ab", "set", "me"]);
 
@@ -59,59 +67,6 @@ export const COMMANDS = [
     ],
   },
 ];
-
-export const userIdOf = (interaction) => interaction?.member?.user?.id ?? interaction?.user?.id ?? null;
-
-// ---------- 응답 만들기 ----------
-const ephemeralFlags = (ephemeral) => (ephemeral ? { flags: EPHEMERAL } : {});
-const newMessage = (view, { ephemeral = true } = {}) => ({
-  body: { type: CHANNEL_MESSAGE, data: { ...view, ...ephemeralFlags(ephemeral) } },
-});
-const update = (view) => ({ body: { type: UPDATE_MESSAGE, data: view } });
-const modal = (customId, title, inputs) => ({
-  body: {
-    type: MODAL,
-    data: {
-      custom_id: customId,
-      title,
-      components: inputs.map((input) => ({
-        type: 1,
-        components: [
-          {
-            type: 4,
-            custom_id: input.id,
-            label: input.label,
-            style: 1,
-            required: input.required ?? true,
-            max_length: input.max ?? 100,
-            ...(input.placeholder ? { placeholder: input.placeholder } : {}),
-          },
-        ],
-      })),
-    },
-  },
-});
-/** 넥슨을 읽는 화면은 3초 안에 끝나지 않을 수 있어 먼저 "처리 중"으로 답하고 나중에 내용을 채운다. */
-const deferred = (kind, run) => ({ defer: kind, run });
-const message = (text) => newMessage(noticeView(text));
-
-// ---------- 입력 읽기 ----------
-function fieldsOf(interaction) {
-  const fields = {};
-  for (const row of interaction?.data?.components ?? []) {
-    for (const component of row.components ?? []) fields[component.custom_id] = component.value ?? "";
-  }
-  return fields;
-}
-
-/** 목표 가격 입력. 비우면 undefined, 0 이면 끔, 숫자가 아니면 null. */
-function parseTarget(text) {
-  const clean = String(text ?? "").replace(/[,\s]/g, "");
-  if (clean === "") return undefined;
-  if (!/^\d+$/.test(clean)) return null;
-  const value = Number(clean);
-  return value <= MAX_TARGET ? value : null;
-}
 
 // ---------- 화면 읽어 오기 ----------
 async function overview(env, uid, user) {

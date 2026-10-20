@@ -1,5 +1,20 @@
 import { erinClock, formatErinClock, formatShopReset, msUntilShopReset } from "./erin.js";
 import { favoritesStatusMessages, marketText, relativeTime, won } from "./format.js";
+import {
+  DANGER,
+  PRIMARY,
+  SECONDARY,
+  SUCCESS,
+  button,
+  linkButton,
+  menuButton,
+  noticeView,
+  row,
+  select,
+  view,
+} from "./ui.js";
+
+export { button, linkButton, noticeView, row, select };
 
 /** 동의 문구가 바뀌면 이 값과 사이트의 개인정보처리방침을 함께 고친다. */
 export const CONSENT_VERSION = "2026-10-19";
@@ -7,32 +22,7 @@ export const CONSENT_VERSION = "2026-10-19";
 const PRIVACY_URL = "https://mabi.spkuma.com/privacy";
 const SITE_URL = "https://mabi.spkuma.com/?ref=bot";
 
-const PRIMARY = 1;
-const SECONDARY = 2;
-const SUCCESS = 3;
-const DANGER = 4;
-const LINK = 5;
 
-export const button = (customId, label, style = SECONDARY, extra = {}) => ({
-  type: 2,
-  custom_id: customId,
-  label,
-  style,
-  ...extra,
-});
-export const linkButton = (label, url) => ({ type: 2, style: LINK, label, url });
-export const row = (...components) => ({ type: 1, components });
-export const select = (customId, placeholder, options, { min = 1, max = 1 } = {}) => ({
-  type: 3,
-  custom_id: customId,
-  placeholder,
-  min_values: min,
-  max_values: Math.min(max, options.length),
-  options,
-});
-
-const menuButton = () => button("m:menu", "← 메뉴");
-const view = (content, components = []) => ({ content, components });
 
 /** 메뉴. 동의한 사용자에게는 지금 상태를 한 줄로 보여 준다. */
 export function menuView(overview) {
@@ -324,6 +314,3 @@ export function deletedView() {
   return view("저장된 정보를 모두 삭제했습니다.", [row(button("m:menu", "메뉴로", PRIMARY))]);
 }
 
-export function noticeView(text, ...buttons) {
-  return view(text, [row(...buttons, menuButton())]);
-}
