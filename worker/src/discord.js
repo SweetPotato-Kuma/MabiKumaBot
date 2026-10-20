@@ -33,8 +33,10 @@ export function createDmChannel(env, userId) {
   return call(env, "/users/@me/channels", { recipient_id: userId });
 }
 
-export function sendMessage(env, channelId, content) {
-  return call(env, `/channels/${channelId}/messages`, { content });
+/** 글 한 줄이나 {content, embeds, components} 를 보낸다. */
+export function sendMessage(env, channelId, message) {
+  const body = typeof message === "string" ? { content: message } : message;
+  return call(env, `/channels/${channelId}/messages`, body);
 }
 
 /** 받는 사람이 DM 을 막았거나 서버를 함께 쓰지 않아 더 시도해도 소용없는 실패인지. */
@@ -57,7 +59,11 @@ export async function editOriginal(env, interaction, view) {
     {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ content: view.content, components: view.components ?? [] }),
+      body: JSON.stringify({
+        content: view.content ?? "",
+        embeds: view.embeds ?? [],
+        components: view.components ?? [],
+      }),
     },
   );
   return response.ok;

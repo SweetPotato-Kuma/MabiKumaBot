@@ -1,5 +1,20 @@
 import { erinClock, formatErinClock, formatShopReset, msUntilShopReset } from "./erin.js";
-import { favoritesStatusMessages, marketText, relativeTime, won } from "./format.js";
+import { relativeTime } from "./format.js";
+import {
+  DANGER,
+  PRIMARY,
+  SECONDARY,
+  SUCCESS,
+  button,
+  linkButton,
+  menuButton,
+  noticeView,
+  row,
+  select,
+  view,
+} from "./ui.js";
+
+export { button, linkButton, noticeView, row, select };
 
 /** 동의 문구가 바뀌면 이 값과 사이트의 개인정보처리방침을 함께 고친다. */
 export const CONSENT_VERSION = "2026-10-19";
@@ -7,32 +22,7 @@ export const CONSENT_VERSION = "2026-10-19";
 const PRIVACY_URL = "https://mabi.spkuma.com/privacy";
 const SITE_URL = "https://mabi.spkuma.com/?ref=bot";
 
-const PRIMARY = 1;
-const SECONDARY = 2;
-const SUCCESS = 3;
-const DANGER = 4;
-const LINK = 5;
 
-export const button = (customId, label, style = SECONDARY, extra = {}) => ({
-  type: 2,
-  custom_id: customId,
-  label,
-  style,
-  ...extra,
-});
-export const linkButton = (label, url) => ({ type: 2, style: LINK, label, url });
-export const row = (...components) => ({ type: 1, components });
-export const select = (customId, placeholder, options, { min = 1, max = 1 } = {}) => ({
-  type: 3,
-  custom_id: customId,
-  placeholder,
-  min_values: min,
-  max_values: Math.min(max, options.length),
-  options,
-});
-
-const menuButton = () => button("m:menu", "← 메뉴");
-const view = (content, components = []) => ({ content, components });
 
 /** 메뉴. 동의한 사용자에게는 지금 상태를 한 줄로 보여 준다. */
 export function menuView(overview) {
@@ -43,7 +33,7 @@ export function menuView(overview) {
   }
   return view(lines.join("\n"), [
     row(
-      button("m:price", "시세 조회", PRIMARY),
+      button("m:search", "경매장 검색", PRIMARY),
       button("m:fav", "즐겨찾기"),
       button("m:ab", "아르바이트 알림"),
       button("m:erin", "에린 시계"),
@@ -57,7 +47,7 @@ export function consentView(target) {
   return view(
     [
       "**개인 기능을 켜려면 동의가 필요합니다.**",
-      "저장하는 정보: 디스코드 사용자 번호, 동의 시점, 알림 설정, 구독한 아르바이트 항목, 즐겨찾기와 목표 가격",
+      "저장하는 정보: 디스코드 사용자 번호, 동의 시점, 알림 설정, 구독한 아르바이트 항목, 저장한 검색과 목표 가격",
       "쓰는 곳: 알림을 DM으로 보내는 데에만 씁니다.",
       "지우는 방법: 메뉴의 내 정보에서 삭제",
       `자세한 내용: ${PRIVACY_URL}`,
@@ -76,97 +66,6 @@ export function erinView(now) {
   return view(erinText(now), [
     row(button("e:r", "새로고침"), button("e:share", "채널에 공유"), menuButton()),
   ]);
-}
-
-const priceLinks = (links) => [
-  linkButton("아이템 페이지", links.item),
-  linkButton("경매장에서 보기", links.auction),
-];
-
-/** 시세 화면. 공유용(share)은 개인 버튼 없이 링크만 붙인다. */
-export function priceView(summary, { share = false } = {}) {
-  if (share) {
-    return view(marketText(summary), [row(...priceLinks(summary.links))]);
-  }
-  return view(marketText(summary), [
-    row(
-      button(`p:share:${summary.name}`, "채널에 공유", PRIMARY),
-      button(`p:fav:${summary.name}`, "즐겨찾기에 추가"),
-      button(`p:r:${summary.name}`, "새로고침"),
-      menuButton(),
-    ),
-    row(...priceLinks(summary.links), button("m:price", "다른 아이템")),
-  ]);
-}
-
-/** 이름으로 한 개가 정해지지 않았을 때. 후보가 있으면 고르게 하고 없으면 다시 입력하게 한다. */
-export function candidatesView(input, candidates, pickId, retryId) {
-  if (candidates.length === 0) {
-    return view(
-      `'${input}'에 맞는 아이템이 없습니다. 이름의 앞부분을 입력해 주세요(예: 낙지). 거래 기록이 있는 아이템만 찾을 수 있습니다.`,
-      [row(button(retryId, "다시 입력", PRIMARY), menuButton())],
-    );
-  }
-  return view(`'${input}'로 시작하는 아이템 ${candidates.length}개입니다. 하나를 골라 주세요.`, [
-    row(
-      select(
-        pickId,
-        "아이템 선택",
-        candidates.map((name) => ({ label: name.slice(0, 100), value: name })),
-      ),
-    ),
-    row(button(retryId, "다시 입력"), menuButton()),
-  ]);
-}
-
-export function favoritesView(status) {
-  const components = [];
-  if (status.items.length > 0) {
-    components.push(
-      row(
-        select(
-          "f:open",
-          "자세히 볼 아이템 선택",
-          status.items.map((item) => ({
-            label: item.name.slice(0, 100),
-            value: item.name,
-            description: item.targetPrice ? `목표 ${won(item.targetPrice)}` : "목표가 없음",
-          })),
-        ),
-      ),
-    );
-  }
-  components.push(
-    row(
-      button("f:add", "추가", PRIMARY),
-      button("f:imp", "사이트에서 가져오기"),
-      button("m:fav", "새로고침"),
-      menuButton(),
-    ),
-  );
-  return view(favoritesStatusMessages(status)[0], components);
-}
-
-/** 즐겨찾기 하나. 시세와 목표 가격, 목표 설정·삭제 버튼. */
-export function favoriteDetailView(name, summary, targetPrice) {
-  const lines = [summary ? marketText(summary) : `**${name}**\n최근 거래 기록이 없습니다.`];
-  if (targetPrice) {
-    const price = summary?.lowest?.price;
-    const reached = price != null && price <= targetPrice;
-    lines.push(`목표 **${won(targetPrice)}** · ${reached ? "지금 목표 이하입니다" : "아직 목표보다 비쌉니다"}`);
-  } else {
-    lines.push("목표가를 정하면 그 가격 이하일 때 DM으로 알려 드립니다.");
-  }
-  const components = [
-    row(
-      button(`f:t:${name}`, targetPrice ? "목표가 바꾸기" : "목표가 정하기", PRIMARY),
-      button(`f:off:${name}`, "목표가 끄기", SECONDARY, { disabled: !targetPrice }),
-      button(`f:del:${name}`, "즐겨찾기에서 삭제", DANGER),
-      button("f:list", "← 목록"),
-    ),
-  ];
-  if (summary) components.push(row(...priceLinks(summary.links)));
-  return view(lines.join("\n"), components);
 }
 
 const CHUNK = 15;
@@ -271,7 +170,7 @@ export function meView(user, favoriteCount, linked) {
       "**내 정보**",
       `즐겨찾기 ${favoriteCount}개 · 아르바이트 ${user.arbeit.length}개 · 동의 ${relativeTime(user.consentedAt)}`,
       `사이트 계정 ${linked ? "연결됨" : "연결 안 됨"}`,
-      "-# 삭제하면 설정, 구독, 즐겨찾기가 모두 지워지며 되돌릴 수 없습니다.",
+      "-# 삭제하면 설정, 구독, 저장한 검색이 모두 지워지며 되돌릴 수 없습니다.",
     ].join("\n"),
     [
       row(
@@ -295,27 +194,8 @@ export function linkCodeView(code) {
   );
 }
 
-/** 사이트 즐겨찾기를 가져온 결과. 0 인 줄은 보이지 않는다. */
-export function importResultView(result) {
-  const lines = [];
-  if (result.added.length > 0) {
-    lines.push(`**사이트 즐겨찾기 ${result.added.length}개를 가져왔습니다.**`);
-    lines.push(...result.added.slice(0, 10).map((name) => `• ${name}`));
-  } else {
-    lines.push("**가져온 즐겨찾기가 없습니다.**");
-  }
-  if (result.existing > 0) lines.push(`이미 있는 항목 ${result.existing}개`);
-  if (result.unknown.length > 0) {
-    const shown = result.unknown.slice(0, 5).join(", ");
-    lines.push(`이름이 아이템과 정확히 맞지 않아 건너뜀: ${shown}${result.unknown.length > 5 ? " 외" : ""}`);
-  }
-  if (result.full > 0) lines.push(`즐겨찾기가 가득 차 ${result.full}개는 가져오지 못했습니다.`);
-  if (result.complex > 0) lines.push(`상세 조건이 있는 검색 ${result.complex}개는 사이트에서만 쓸 수 있습니다.`);
-  return view(lines.join("\n"), [row(button("m:fav", "즐겨찾기 열기", PRIMARY), menuButton())]);
-}
-
 export function confirmDeleteView() {
-  return view("설정, 구독, 즐겨찾기를 모두 삭제합니다. 정말 삭제할까요?", [
+  return view("설정, 구독, 저장한 검색을 모두 삭제합니다. 정말 삭제할까요?", [
     row(button("me:del", "삭제", DANGER), button("me:cancel", "취소")),
   ]);
 }
@@ -324,6 +204,3 @@ export function deletedView() {
   return view("저장된 정보를 모두 삭제했습니다.", [row(button("m:menu", "메뉴로", PRIMARY))]);
 }
 
-export function noticeView(text, ...buttons) {
-  return view(text, [row(...buttons, menuButton())]);
-}
