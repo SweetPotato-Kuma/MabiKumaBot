@@ -321,6 +321,13 @@ describe("상세 조건", () => {
     assert.deepEqual(find(level, "k:t:pet|펫 정보|레벨").options.map((o) => o.value), ["20"]);
   });
 
+  it("고를 값이 하나도 없으면 빈 메뉴 대신 안내와 돌아가기 단추만 둔다", async () => {
+    site.catalog.entries.push({ label: "세트 효과", kind: "named", optionType: "세트 효과", count: 1, values: [{ value: "", count: 1 }], subTypes: [], valuesBySub: {}, thresholds: {} });
+    const body = await (await conditionComponent(env, interaction(base), "add", "", ["named|세트 효과"])).run();
+    assert.match(body.content, /고를 값이 없습니다/);
+    assert.ok(body.components.every((line) => line.components.every((c) => c.type === 2)));
+  });
+
   it("색상은 사이트에서 정하라고 알려 준다", async () => {
     const body = await (await conditionComponent(env, interaction(base), "add", "", ["color|색상"])).run();
     assert.match(body.content, /사이트에서/);

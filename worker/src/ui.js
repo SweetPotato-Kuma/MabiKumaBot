@@ -26,19 +26,30 @@ export const button = (customId, label, style = SECONDARY, extra = {}) => ({
 });
 export const linkButton = (label, url) => ({ type: 2, style: LINK, label, url });
 export const row = (...components) => ({ type: 1, components: components.filter(Boolean) });
-export const select = (customId, placeholder, options, { min = 1, max = 1 } = {}) => ({
-  type: 3,
-  custom_id: customId,
-  placeholder,
-  min_values: min,
-  max_values: Math.max(1, Math.min(max, options.length)),
-  options: options.slice(0, 25).map((option) => ({
-    ...option,
-    label: String(option.label).slice(0, 100),
-    value: String(option.value).slice(0, 100),
-    ...(option.description ? { description: String(option.description).slice(0, 100) } : {}),
-  })),
-});
+/**
+ * 선택 메뉴. 디스코드는 항목이 없거나 이름이나 값이 빈 항목이 있으면 메시지 전체를 거절하므로,
+ * 빈 항목은 빼고 남는 것이 없으면 메뉴를 만들지 않는다(null, row 가 걸러 낸다).
+ */
+export function select(customId, placeholder, options, { min = 1, max = 1 } = {}) {
+  const kept = options
+    .filter((option) => String(option.label ?? "").trim() !== "" && String(option.value ?? "") !== "")
+    .slice(0, 25)
+    .map((option) => ({
+      ...option,
+      label: String(option.label).slice(0, 100),
+      value: String(option.value).slice(0, 100),
+      ...(option.description ? { description: String(option.description).slice(0, 100) } : {}),
+    }));
+  if (kept.length === 0) return null;
+  return {
+    type: 3,
+    custom_id: customId,
+    placeholder: String(placeholder).slice(0, 150),
+    min_values: Math.min(min, kept.length),
+    max_values: Math.max(1, Math.min(max, kept.length)),
+    options: kept,
+  };
+}
 
 /** 화면 하나. 글만 쓰는 화면과 카드(embed)를 쓰는 화면이 서로 바뀌어도 앞 화면의 것이 남지 않게 둘 다 적는다. */
 export const view = (content, components = [], embeds = []) => ({

@@ -307,7 +307,12 @@ function choiceStep(entry) {
     return { content: "색상 조건은 사이트에서 정해 주세요.", rows: [] };
   }
   if (entry.kind === "number") return thresholdStep(entry, "");
-  const choices = choicesOf(entry).filter((choice) => fitsId(`k:t:${ref}${SEP}${choice.value}`));
+  const choices = choicesOf(entry).filter(
+    (choice) => String(choice.label).trim() !== "" && choice.value !== "" && fitsId(`k:t:${ref}${SEP}${choice.value}`),
+  );
+  if (choices.length === 0) {
+    return { content: `**${entry.label}** 지금 결과에서 고를 값이 없습니다.`, rows: [row(button("q:cond", "← 조건으로"), button("q:back", "← 결과로"))] };
+  }
   return {
     content: `**${entry.label}** 무엇을 고를까요?`,
     rows: [row(select(`k:v:${ref}`, entry.label, choices)), row(button("q:cond", "← 조건으로"), button("q:back", "← 결과로"))],
