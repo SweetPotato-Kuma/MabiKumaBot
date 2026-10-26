@@ -10,6 +10,8 @@ const CHANNEL_MESSAGE = 4;
 const UPDATE_MESSAGE = 7;
 const MODAL = 9;
 export const EPHEMERAL = 64;
+/** 새 형식(Components V2) 메시지. 이미 보낸 메시지에 붙이거나 뗄 수 없다. */
+export const COMPONENTS_V2 = 1 << 15;
 
 /** 사이트 로고의 보라. 검색 결과 카드의 띠 색이다. */
 export const ACCENT = 0x9e3563;
@@ -58,18 +60,41 @@ export const view = (content, components = [], embeds = []) => ({
   components: components.filter((each) => each.components?.length > 0),
 });
 
+/**
+ * 새 형식 화면. 행(action row)을 다섯 개보다 많이 둘 수 있는 대신 content 와 embeds 를 쓰지 못해 글은 글 칸(10)에 넣는다.
+ * 한 메시지에 구성요소가 모두 40개까지다(행과 그 안의 단추·메뉴를 따로 센다).
+ */
+export const v2View = (texts, components = []) => ({
+  flags: COMPONENTS_V2,
+  components: [
+    ...texts.map((content) => ({ type: 10, content })),
+    ...components.filter((each) => each.components?.length > 0),
+  ],
+});
+export const isV2 = (interaction) => ((interaction?.message?.flags ?? 0) & COMPONENTS_V2) !== 0;
+
 export const menuButton = () => button("m:menu", "← 메뉴");
 
 export const noticeView = (text, ...buttons) => view(text, [row(...buttons, menuButton())]);
 
 // ---------- 상호작용 응답 ----------
-export const newMessage = (body, { ephemeral = true } = {}) => ({
-  body: { type: CHANNEL_MESSAGE, data: { ...body, ...(ephemeral ? { flags: EPHEMERAL } : {}) } },
-});
+export function newMessage(body, { ephemeral = true } = {}) {
+  const flags = (body.flags ?? 0) | (ephemeral ? EPHEMERAL : 0);
+  return { body: { type: CHANNEL_MESSAGE, data: { ...body, ...(flags ? { flags } : {}) } } };
+}
 export const update = (body) => ({ body: { type: UPDATE_MESSAGE, data: body } });
 /** 넥슨을 읽는 화면은 3초 안에 끝나지 않을 수 있어 먼저 "처리 중"으로 답하고 나중에 내용을 채운다. */
 export const deferred = (kind, run) => ({ defer: kind, run });
 export const message = (text) => newMessage(noticeView(text));
+
+/** 새 형식 메시지는 일반 화면으로 고칠 수 없다. 거기서 여는 일반 화면은 새 메시지로 띄운다. */
+export function keepFormat(interaction, response) {
+  if (!isV2(interaction) || !response) return response;
+  if (response.defer === "update") return { ...response, defer: "new" };
+  const data = response.body?.data;
+  if (response.body?.type === UPDATE_MESSAGE && !((data?.flags ?? 0) & COMPONENTS_V2)) return newMessage(data);
+  return response;
+}
 
 /** 입력창. 칸마다 이름, 길이, 미리 채울 값, 예시를 받는다. */
 export const modal = (customId, title, inputs) => ({

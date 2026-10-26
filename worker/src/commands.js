@@ -4,6 +4,7 @@ import { EMPTY_QUERY, conditionComponent, openSearch, searchComponent, searchMod
 import {
   deferred,
   fieldsOf,
+  keepFormat,
   message,
   modal,
   newMessage,
@@ -13,9 +14,10 @@ import {
 } from "./ui.js";
 import {
   CONSENT_VERSION,
+  ARBEIT_PAGE_SIZE,
   QUIET_PRESETS,
+  arbeitGroups,
   arbeitView,
-  chunkEntries,
   confirmDeleteView,
   consentView,
   deletedView,
@@ -90,8 +92,9 @@ async function openTarget(env, uid, target, now) {
     case "fav":
       return personal(env, uid, "fav", () => deferred("update", () => savedList(env, uid)));
     case "ab":
+      // 새 형식 화면이라 지금 메시지를 고치지 못하고 새 메시지로 연다.
       return personal(env, uid, "ab", async (user) =>
-        update(arbeitView(await env.SITE.listArbeitEntries(), user.arbeit)),
+        newMessage(arbeitView(await env.SITE.listArbeitEntries(), user.arbeit)),
       );
     case "set":
       return personal(env, uid, "set", (user) => update(settingsView(user.settings)));
@@ -106,22 +109,34 @@ async function openTarget(env, uid, target, now) {
 }
 
 // ---------- 버튼과 선택 메뉴 ----------
-async function arbeitComponent(env, interaction, act, values) {
+/**
+ * 묶음 칸(a:g:묶음 번호)에서 고르면 그 묶음의 다른 항목은 끈다. 쪽 넘기기(a:p:쪽)와 전체 끄기(a:none:쪽).
+ * 예전 메시지의 단추(a:0, a:all)는 만료로 본다.
+ */
+async function arbeitComponent(env, interaction, act, rest, values) {
   const uid = userIdOf(interaction);
+  const user = await env.SITE.getUser(uid);
+  if (!user) return update(consentView("ab"));
   const entries = await env.SITE.listArbeitEntries();
-  let subscribed;
-  if (act === "all") {
-    subscribed = await env.SITE.changeArbeitSubs(uid, { all: true });
+  let subscribed = user.arbeit;
+  let page = Number(rest) || 0;
+  if (act === "g") {
+    const index = Number(rest);
+    const group = arbeitGroups(entries)[index];
+    if (!group) return null;
+    const ids = group.entries.map((entry) => entry.id);
+    const chosen = ids.includes(values[0]) ? values[0] : null;
+    subscribed = await env.SITE.changeArbeitSubs(uid, {
+      add: chosen ? [chosen] : [],
+      remove: ids.filter((id) => id !== chosen),
+    });
+    page = Math.floor(index / ARBEIT_PAGE_SIZE);
   } else if (act === "none") {
     subscribed = await env.SITE.changeArbeitSubs(uid, { none: true });
-  } else {
-    const chunk = (chunkEntries(entries)[Number(act)] ?? []).map((entry) => entry.id);
-    subscribed = await env.SITE.changeArbeitSubs(uid, {
-      add: values.filter((id) => chunk.includes(id)),
-      remove: chunk.filter((id) => !values.includes(id)),
-    });
+  } else if (act !== "p") {
+    return null;
   }
-  return update(arbeitView(entries, subscribed));
+  return update(arbeitView(entries, subscribed, page));
 }
 
 async function settingsComponent(env, interaction, act, values) {
@@ -165,6 +180,10 @@ async function meComponent(env, interaction, act) {
 }
 
 async function component(env, interaction, now) {
+  return keepFormat(interaction, await componentResponse(env, interaction, now));
+}
+
+async function componentResponse(env, interaction, now) {
   const uid = userIdOf(interaction);
   const values = interaction.data.values ?? [];
   const [namespace, act, ...parts] = String(interaction.data.custom_id).split(":");
@@ -187,7 +206,8 @@ async function component(env, interaction, now) {
       result = await savedComponent(env, interaction, act, rest, values);
       break;
     case "a":
-      return arbeitComponent(env, interaction, act, values);
+      result = await arbeitComponent(env, interaction, act, rest, values);
+      break;
     case "s":
       return settingsComponent(env, interaction, act, values);
     case "me":

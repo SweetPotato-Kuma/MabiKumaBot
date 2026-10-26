@@ -3,7 +3,7 @@ import { beforeEach, describe, it } from "node:test";
 
 import { COMMANDS, CONSENT_VERSION } from "../src/commands.js";
 import { stateUrl } from "../src/search.js";
-import { ALICE, ENTRIES, click, componentsOf, fakeSite, find, ids, run, slash, submit, typing } from "./helpers.js";
+import { ALICE, click, componentsOf, fakeSite, find, ids, run, slash, submit, textOf, typing } from "./helpers.js";
 
 const MENU_BUTTONS = ["m:search", "m:fav", "m:ab", "m:erin", "m:set", "m:me"];
 const EMPTY = { keyword: "", category: "", filterKey: "", exact: false };
@@ -171,14 +171,71 @@ describe("에린 시계", () => {
 describe("아르바이트 알림", () => {
   beforeEach(register);
 
-  it("메뉴에서 고른 항목은 켜고 해제한 항목은 끈다", async () => {
-    await site.changeArbeitSubs(ALICE, { add: ["entry-1", "entry-17"] });
-    const view = (await run(site, click("m:ab"))).view;
-    assert.equal(find(view, "a:0").options.length, 15);
+  const V2 = 1 << 15;
+  const fromArbeit = (customId, values) => ({ ...click(customId, values), message: { flags: V2 | 64 } });
 
-    await run(site, click("a:0", ["entry-2"]));
-    assert.deepEqual(site.users.get(ALICE).arbeit, ["entry-2", "entry-17"]);
-    assert.match((await run(site, click("a:all"))).view.content, new RegExp(`\\(${ENTRIES.length}개\\)`));
+  it("새 형식 메시지로 열고 한 쪽에 묶음 12개를 묶음마다 칸 하나로 보여 준다", async () => {
+    await site.changeArbeitSubs(ALICE, { add: ["entry-1", "entry-20"] });
+    const { initial, view } = await run(site, click("m:ab"));
+    assert.equal(initial.type, 4);
+    assert.equal(view.flags, V2 | 64);
+    assert.equal(view.content, undefined);
+    assert.equal(view.embeds, undefined);
+    assert.match(textOf(view), /아르바이트 알림\*\* 2개 묶음 켜짐/);
+
+    const menus = componentsOf(view).filter((each) => each.type === 3);
+    assert.equal(menus.length, 12);
+    assert.deepEqual(menus[0].options.map((o) => [o.value, o.default ?? false]), [
+      ["entry-0", false],
+      ["entry-1", true],
+      ["off", false],
+    ]);
+    assert.equal(menus[0].options[0].description, "모집 7~19시, 보고 9시부터");
+    assert.equal(menus[0].max_values, 1);
+    assert.equal(menus[3].placeholder, "묶음3: 알림 끔");
+    assert.equal(menus[3].options[0].description, "보고 15시부터");
+    assert.deepEqual(ids(view).slice(-5), ["a:p:-1", "a:pg", "a:p:1", "a:none:0", "m:menu"]);
+    assert.equal(find(view, "a:p:-1").disabled, true);
+
+    const total = (view.components ?? []).reduce((n, each) => n + 1 + (each.components?.length ?? 0), 0);
+    assert.ok(total <= 40, `구성요소 ${total}개`);
+  });
+
+  it("묶음에서는 하나만 켜지고 알림 끄기는 그 묶음만 끈다", async () => {
+    await site.changeArbeitSubs(ALICE, { add: ["entry-0", "entry-1", "entry-20"] });
+    const picked = await run(site, fromArbeit("a:g:0", ["entry-1"]));
+    assert.equal(picked.initial.type, 7);
+    assert.deepEqual(site.users.get(ALICE).arbeit, ["entry-1", "entry-20"]);
+
+    await run(site, fromArbeit("a:g:0", ["off"]));
+    assert.deepEqual(site.users.get(ALICE).arbeit, ["entry-20"]);
+
+    const second = await run(site, fromArbeit("a:g:18", ["entry-21"]));
+    assert.deepEqual(site.users.get(ALICE).arbeit, ["entry-20", "entry-21"]);
+    assert.ok(find(second.view, "a:g:18"));
+    assert.equal(find(second.view, "a:p:2").disabled, true);
+  });
+
+  it("쪽을 넘기고 전체 끄기를 하고 메뉴는 새 메시지로 연다", async () => {
+    await site.changeArbeitSubs(ALICE, { add: ["entry-3", "entry-25"] });
+    const next = await run(site, fromArbeit("a:p:1"));
+    assert.equal(componentsOf(next.view).filter((each) => each.type === 3).length, 11);
+    assert.equal(find(next.view, "a:pg").label, "2/2");
+
+    const cleared = await run(site, fromArbeit("a:none:1"));
+    assert.deepEqual(site.users.get(ALICE).arbeit, []);
+    assert.ok(find(cleared.view, "a:none:1"));
+
+    const menu = await run(site, fromArbeit("m:menu"));
+    assert.equal(menu.initial.type, 4);
+    assert.equal(menu.view.flags, 64);
+    assert.deepEqual(ids(menu.view).slice(0, 6), MENU_BUTTONS);
+  });
+
+  it("예전 메시지의 단추는 만료로 안내한다", async () => {
+    assert.match((await run(site, click("a:0", ["entry-2"]))).view.content, /만료된 단추/);
+    assert.match((await run(site, click("a:all"))).view.content, /만료된 단추/);
+    assert.match((await run(site, fromArbeit("a:g:99", ["entry-2"]))).view.content, /만료된 단추/);
   });
 });
 
