@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import { runArbeitAlerts, runSearchAlerts } from "../src/alerts.js";
 import { CONSENT_VERSION } from "../src/commands.js";
 import { chunkMessages, searchAlertMessages } from "../src/format.js";
-import worker from "../src/index.js";
+import worker, { runScheduled } from "../src/index.js";
 import { ALICE, BOB, fakeSite } from "./helpers.js";
 
 const respond = (status, body = {}) => new Response(JSON.stringify(body), { status });
@@ -252,5 +252,25 @@ describe("알림 보내기", () => {
       "dueSearchAlerts",
       Math.floor(1_700_000_120_000 / 60_000),
     ]);
+  });
+
+  it("아르바이트를 먼저 끝내고 저장 검색이 오래 걸리면 기다리지 않는다", async () => {
+    const order = [];
+    const slowSite = {
+      ...site,
+      async dueArbeitAlerts() {
+        order.push("arbeit");
+        return [];
+      },
+      dueSearchAlerts() {
+        order.push("searches");
+        return new Promise(() => {});
+      },
+    };
+    const started = Date.now();
+    await runScheduled({ ...env, SITE: slowSite }, 1_700_000_120_000, 30);
+
+    assert.deepEqual(order, ["arbeit", "searches"]);
+    assert.ok(Date.now() - started < 1000);
   });
 });
