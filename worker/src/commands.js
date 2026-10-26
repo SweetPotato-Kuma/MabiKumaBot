@@ -1,6 +1,6 @@
 import { editOriginal } from "./discord.js";
-import { saveFromSearch, savedComponent, savedList, savedModal } from "./saved.js";
-import { EMPTY_QUERY, conditionComponent, openSearch, searchComponent, searchModal } from "./search.js";
+import { openPrice, priceComponent, priceModal, priceModalSubmit } from "./price.js";
+import { savedComponent, savedList } from "./saved.js";
 import {
   deferred,
   fieldsOf,
@@ -59,7 +59,7 @@ export const COMMANDS = [
       {
         type: STRING,
         name: "아이템",
-        description: "바로 검색할 아이템 (비우면 메뉴가 열립니다)",
+        description: "바로 시세를 볼 아이템 (비우면 메뉴가 열립니다)",
         autocomplete: true,
       },
     ],
@@ -85,8 +85,10 @@ async function openTarget(env, uid, target, now) {
       const user = await env.SITE.getUser(uid);
       return update(menuView(user ? await overview(env, uid, user) : null));
     }
+    // 예전 메뉴의 경매장 검색 단추도 시세 보기로 잇는다.
     case "search":
-      return deferred("update", () => openSearch(env, EMPTY_QUERY));
+    case "price":
+      return priceModal();
     case "erin":
       return update(erinView(now));
     case "fav":
@@ -197,10 +199,10 @@ async function componentResponse(env, interaction, now) {
       await env.SITE.registerUser(uid, CONSENT_VERSION);
       return openTarget(env, uid, rest, now);
     case "q":
-      result = act === "save" ? await saveFromSearch(env, interaction) : await searchComponent(env, interaction, act, values);
+      // 봇의 경매장 검색 화면(q:, k:)은 뺐다. 예전 메시지의 단추는 만료로 안내한다.
       break;
-    case "k":
-      result = await conditionComponent(env, interaction, act, rest, values);
+    case "p":
+      result = await priceComponent(env, interaction, act, rest, values);
       break;
     case "f":
       result = await savedComponent(env, interaction, act, rest, values);
@@ -229,12 +231,7 @@ async function modalSubmit(env, interaction) {
   const [namespace, act, ...parts] = String(interaction.data.custom_id).split(":");
   const rest = parts.join(":");
 
-  if (namespace === "q" || namespace === "k") {
-    return (await searchModal(env, interaction, namespace, act, rest, fields)) ?? message(EXPIRED);
-  }
-  if (namespace === "f") {
-    return (await savedModal(env, interaction, act, rest, fields)) ?? message(EXPIRED);
-  }
+  if (namespace === "p" && act === "m") return priceModalSubmit(env, interaction, fields);
   if (namespace === "s" && act === "custom") {
     const start = Number(fields.start);
     const end = Number(fields.end);
@@ -252,10 +249,7 @@ async function slash(env, interaction) {
   const uid = userIdOf(interaction);
   const name = String(interaction.data.options?.find((option) => option.name === "아이템")?.value ?? "").trim();
   if (name !== "") {
-    return deferred("new", async () => {
-      const exact = (await env.SITE.searchItems(name).catch(() => [])).includes(name);
-      return openSearch(env, { ...EMPTY_QUERY, keyword: name, exact });
-    });
+    return deferred("new", () => openPrice(env, uid, name));
   }
   const user = await env.SITE.getUser(uid);
   return newMessage(menuView(user ? await overview(env, uid, user) : null));
