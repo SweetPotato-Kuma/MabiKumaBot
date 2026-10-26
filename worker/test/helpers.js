@@ -4,12 +4,16 @@ export const ALICE = "111111111111111111";
 export const BOB = "222222222222222222";
 export const NOW = Date.parse("2026-10-20T14:20:00+09:00");
 
-/** 두 개의 선택 메뉴로 나뉘도록 15개를 넘기는 시간표. 실제 시간표와 모양이 같다. */
-export const ENTRIES = Array.from({ length: 20 }, (_, i) => ({
+/**
+ * 실제 시간표와 모양이 같은 시간표. 앞의 세 묶음은 항목이 둘씩이고 나머지는 하나씩, 모두 23묶음이라 두 쪽으로 나뉜다.
+ * 앞쪽 항목만 모집 시간이 있다.
+ */
+export const ENTRIES = Array.from({ length: 26 }, (_, i) => ({
   id: `entry-${i}`,
-  group: `묶음${Math.floor(i / 5)}`,
+  group: `묶음${i < 6 ? Math.floor(i / 2) : i - 3}`,
   label: `항목 ${i}`,
   report: 9 + (i % 12),
+  ...(i < 6 ? { recruit: [7, 19] } : {}),
   verified: false,
 }));
 
@@ -213,7 +217,13 @@ export const typing = (value, user = ALICE) => ({
 
 // ---------- 결과 읽기 ----------
 /** 모든 단추와 메뉴를 한 줄로 펼친다. */
-export const componentsOf = (view) => (view?.components ?? []).flatMap((line) => line.components);
+export const componentsOf = (view) => (view?.components ?? []).flatMap((line) => line.components ?? []);
+/** 새 형식 메시지의 글 칸을 이어 붙인다. */
+export const textOf = (view) =>
+  (view?.components ?? [])
+    .filter((each) => each.type === 10)
+    .map((each) => each.content)
+    .join("\n");
 export const find = (view, customId) => componentsOf(view).find((component) => component.custom_id === customId);
 export const ids = (view) => componentsOf(view).map((component) => component.custom_id ?? component.url);
 

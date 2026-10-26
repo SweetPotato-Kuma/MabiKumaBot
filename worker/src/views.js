@@ -11,6 +11,7 @@ import {
   noticeView,
   row,
   select,
+  v2View,
   view,
 } from "./ui.js";
 
@@ -68,45 +69,63 @@ export function erinView(now) {
   ]);
 }
 
-const CHUNK = 15;
+/** 한 쪽에 두는 묶음 수. 묶음마다 행과 메뉴로 2개씩이라 글 1개, 단추 행 6개를 더해도 40개 안에 든다. */
+export const ARBEIT_PAGE_SIZE = 12;
+export const ARBEIT_OFF = "off";
 
-export function chunkEntries(entries) {
-  const chunks = [];
-  for (let i = 0; i < entries.length; i += CHUNK) chunks.push(entries.slice(i, i + CHUNK));
-  return chunks;
+/** 시간표를 묶음(식료품점, 대장간…)으로 모은다. 순서는 시간표 순서다. */
+export function arbeitGroups(entries) {
+  const groups = [];
+  for (const entry of entries) {
+    let group = groups.find((each) => each.name === entry.group);
+    if (!group) groups.push((group = { name: entry.group, entries: [] }));
+    group.entries.push(entry);
+  }
+  return groups;
 }
 
-/** 아르바이트 알림. 선택 메뉴는 25개까지라 항목을 나눠 여러 개로 보여 주고, 선택한 항목이 켜진다. */
-export function arbeitView(entries, subscribed) {
-  const on = new Set(subscribed);
-  const lines = [`**아르바이트 알림** (${subscribed.length}개)`];
-  const chosen = entries.filter((entry) => on.has(entry.id));
-  if (chosen.length === 0) {
-    lines.push("구독한 항목이 없습니다. 아래 메뉴에서 알림을 받을 항목을 고르세요.");
-  } else {
-    lines.push(...chosen.map((entry) => `• ${entry.label} · 에린 ${entry.report}시 이후`));
-  }
-  lines.push("-# 메뉴에서 체크한 항목만 알림이 옵니다. 에린 시간으로 보고할 수 있게 되면 36분마다 알려 드립니다.");
+const arbeitHours = (entry) =>
+  entry.recruit
+    ? `모집 ${entry.recruit[0]}~${entry.recruit[1]}시, 보고 ${entry.report}시부터`
+    : `보고 ${entry.report}시부터`;
 
-  const menus = chunkEntries(entries).map((chunk, index) =>
-    row(
-      select(
-        `a:${index}`,
-        `${chunk[0].group} ~ ${chunk[chunk.length - 1].group}`,
-        chunk.map((entry) => ({
-          label: entry.label.slice(0, 100),
+/**
+ * 아르바이트 알림. 게임에서 한 묶음은 에린 하루에 한 번만 할 수 있어 묶음마다 하나만 고른다.
+ * 묶음이 많아 새 형식 메시지로 두 쪽에 나눈다.
+ */
+export function arbeitView(entries, subscribed, page = 0) {
+  const on = new Set(subscribed);
+  const groups = arbeitGroups(entries);
+  const pages = Math.max(1, Math.ceil(groups.length / ARBEIT_PAGE_SIZE));
+  const current = Math.min(Math.max(0, Number(page) || 0), pages - 1);
+  const active = groups.filter((group) => group.entries.some((entry) => on.has(entry.id))).length;
+
+  const menus = groups.slice(current * ARBEIT_PAGE_SIZE, (current + 1) * ARBEIT_PAGE_SIZE).map((group, offset) => {
+    const chosen = group.entries.find((entry) => on.has(entry.id));
+    return row(
+      select(`a:g:${current * ARBEIT_PAGE_SIZE + offset}`, `${group.name}: 알림 끔`, [
+        ...group.entries.map((entry) => ({
+          label: entry.label,
           value: entry.id,
-          description: `에린 ${entry.report}시 이후 보고`,
-          default: on.has(entry.id),
+          description: arbeitHours(entry),
+          default: entry === chosen,
         })),
-        { min: 0, max: chunk.length },
-      ),
-    ),
+        { label: "알림 끄기", value: ARBEIT_OFF },
+      ]),
+    );
+  });
+  const paging =
+    pages > 1
+      ? [
+          button(`a:p:${current - 1}`, "← 이전", SECONDARY, { disabled: current === 0 }),
+          button("a:pg", `${current + 1}/${pages}`, SECONDARY, { disabled: true }),
+          button(`a:p:${current + 1}`, "다음 →", SECONDARY, { disabled: current === pages - 1 }),
+        ]
+      : [];
+  return v2View(
+    [`**아르바이트 알림** ${active}개 묶음 켜짐`],
+    [...menus, row(...paging, button(`a:none:${current}`, "전체 끄기"), menuButton())],
   );
-  return view(lines.join("\n"), [
-    ...menus,
-    row(button("a:all", "전체 켜기", SUCCESS), button("a:none", "전체 끄기"), menuButton()),
-  ]);
 }
 
 export const QUIET_PRESETS = [
