@@ -1,5 +1,5 @@
 import { createDmChannel, isChannelGone, isDmBlocked, sendMessage } from "./discord.js";
-import { arbeitMessages, favoriteAlertMessages } from "./format.js";
+import { arbeitMessages, searchAlertMessages } from "./format.js";
 
 const WINDOW_MS = 60_000;
 const CHUNK = 5;
@@ -75,8 +75,8 @@ export async function runArbeitAlerts(env, scheduledTime) {
   return sendAll(env, alerts, arbeitMessages);
 }
 
-/** 이 분에 확인할 즐겨찾기의 최저가가 목표 가격 이하가 된 사람에게 DM 으로 알린다. */
-export async function runFavoriteAlerts(env, scheduledTime) {
-  const alerts = await env.SITE.dueFavoriteAlerts(Math.floor(scheduledTime / WINDOW_MS));
-  return sendAll(env, alerts, favoriteAlertMessages);
+/** 이 분에 확인할 저장 검색의 최저가가 목표 가격 이하가 된 사람에게 DM 으로 알린다. */
+export async function runSearchAlerts(env, scheduledTime) {
+  const alerts = await env.SITE.dueSearchAlerts(Math.floor(scheduledTime / WINDOW_MS));
+  return sendAll(env, alerts, searchAlertMessages);
 }

@@ -1,5 +1,7 @@
-// 디스코드 메시지 한 통은 2000자까지라 길어지면 나눠 보낸다.
+// 디스코드 메시지 한 통은 2000자까지라 길어지면 나눠 보낸다. 카드는 한 통에 10장까지다.
 const MAX_LENGTH = 1900;
+const MAX_EMBEDS = 10;
+const ACCENT = 0x9e3563;
 
 export const won = (value) => Number(value).toLocaleString("ko-KR");
 
@@ -7,8 +9,6 @@ const seconds = (ms) => Math.floor(ms / 1000);
 
 /** 디스코드가 "3분 전"처럼 상대 시각으로 그려 주는 표기. */
 export const relativeTime = (ms) => `<t:${seconds(ms)}:R>`;
-
-export const dataNote = (ms) => `-# 넥슨 경매장 기준 ${relativeTime(ms)}`;
 
 const SETTINGS_HINT = "-# 알림 방식은 /마비쿠마 의 알림 설정에서 바꿀 수 있습니다.";
 
@@ -44,71 +44,33 @@ export function arbeitMessages(alert) {
   );
 }
 
-const link = (label, url) => `[${label}](<${url}>)`;
-
-function favoriteLine(item) {
-  return `• ${link(item.name, item.links.item)} 최저 **${won(item.price)}** (목표 ${won(item.target)}) · 매물 ${won(item.listings)}개 · ${link("경매장", item.links.auction)}`;
-}
-
-export function favoriteAlertMessages(alert) {
-  const checkedAt = Math.max(...alert.items.map((item) => item.checkedAt));
-  if (!alert.digest) {
-    return alert.items.map(
-      (item) => `**목표 가격 도달**\n${favoriteLine(item)}\n${dataNote(item.checkedAt)}`,
-    );
-  }
-  return chunkMessages(
-    "**목표 가격 도달**",
-    alert.items.map(favoriteLine),
-    `${dataNote(checkedAt)}\n${SETTINGS_HINT}`,
-  );
-}
-
-/** 즐겨찾기 목록 화면의 본문. 항목이 많으면 줄이 길어지지 않게 링크를 뺀다. */
-export function favoritesStatusMessages(status) {
-  if (status.items.length === 0) {
-    return ["즐겨찾기가 없습니다. 아래 추가 버튼으로 아이템을 더하세요."];
-  }
-  const withLinks = status.items.length <= 8;
-  const lines = status.items.map((item) => {
-    const name = withLinks ? link(item.name, item.links.item) : item.name;
-    const price = item.unavailable
-      ? "최저가를 읽지 못했습니다"
-      : item.lowest.price === null
-        ? "매물 없음"
-        : `최저 **${won(item.lowest.price)}** (매물 ${won(item.lowest.listings)}개)`;
-    const parts = [price];
-    if (item.day) parts.push(`24시간 중위 ${won(item.day.mid)}`);
-    if (item.targetPrice) {
-      const reached = item.lowest?.price != null && item.lowest.price <= item.targetPrice;
-      parts.push(`목표 ${won(item.targetPrice)}${reached ? " 이하" : ""}`);
-    }
-    return `• ${name} ${parts.join(" · ")}`;
+/** 목표가에 닿은 저장 검색 하나의 카드. 제목을 누르면 사이트에서 같은 검색이 열린다. */
+export function searchAlertCard(search) {
+  const items = search.items.slice(0, 3).flatMap((item, index) => {
+    const count = item.count > 1 ? ` ×${won(item.count)}` : "";
+    const head = `**${index + 1}.** ${won(item.price)} ${item.name}${count}`;
+    return item.notes?.length > 0 ? [head, `　${item.notes.join(" / ")}`] : [head];
   });
-  return chunkMessages(`**내 즐겨찾기** (${lines.length}개)`, lines, dataNote(status.checkedAt));
+  return {
+    title: `목표 가격 도달: ${search.name}`.slice(0, 256),
+    url: search.url,
+    color: ACCENT,
+    description: [
+      `최저 **${won(search.price)}** (목표 ${won(search.target)}), 조건에 맞는 매물 ${won(search.total)}개`,
+      ...items,
+    ]
+      .join("\n")
+      .slice(0, 4000),
+    footer: { text: "넥슨 경매장 기준. 알림 방식은 /마비쿠마 의 알림 설정에서 바꿀 수 있습니다." },
+    timestamp: new Date(search.checkedAt).toISOString(),
+  };
 }
 
-export function marketText(summary) {
-  const lines = [`**${summary.name}**`];
-  if (summary.lowest?.price != null) {
-    lines.push(`현재 최저가 **${won(summary.lowest.price)}** (매물 ${won(summary.lowest.listings)}개) ${relativeTime(summary.lowest.checkedAt)}`);
-  } else if (summary.lowest) {
-    lines.push("현재 등록된 매물이 없습니다.");
-  }
-  if (summary.day) {
-    const d = summary.day;
-    lines.push(
-      `최근 24시간 거래 ${won(d.n)}건 · 수량 ${won(d.qty)}`,
-      `중위가 **${won(d.mid)}** · 평균 ${won(d.avg)} · 최저 ${won(d.lo)} · 최고 ${won(d.hi)}`,
-    );
-  } else {
-    lines.push("최근 24시간 거래가 없습니다.");
-  }
-  if (summary.series.length > 0) {
-    lines.push(
-      `최근 7일 중위가: ${summary.series.map((day) => `${day.date.slice(5)} ${won(day.mid)}`).join(" · ")}`,
-    );
-  }
-  lines.push("-# 거래 기록은 최대 10분 늦을 수 있습니다.");
-  return lines.join("\n");
+/** 저장 검색 알림. 묶어 받으면 한 통에 카드 10장까지, 아니면 검색마다 한 통이다. */
+export function searchAlertMessages(alert) {
+  const cards = alert.searches.map(searchAlertCard);
+  if (!alert.digest) return cards.map((card) => ({ embeds: [card] }));
+  const messages = [];
+  for (let i = 0; i < cards.length; i += MAX_EMBEDS) messages.push({ embeds: cards.slice(i, i + MAX_EMBEDS) });
+  return messages;
 }
