@@ -45,6 +45,7 @@ describe("시세 카드", () => {
     assert.match(body.embeds[0].description, /7일 ▼ 2\.3%/);
     assert.equal(body.embeds[0].image.url, card.charts.line);
     assert.equal(find(body, "p:s:candle:낙지").label, "캔들로 보기");
+    assert.match(priceView({ ...card, lowest: null }, "line").embeds[0].description, /최저가를 읽지 못했습니다/);
   });
 });
 

@@ -36,10 +36,13 @@ const otherStyle = (style) => (style === "candle" ? "line" : "candle");
 /** 시세 카드. 제목 줄 앞에 아이콘을 작게 붙이고, 아래에 고른 모양의 차트 그림을 붙인다. */
 export function priceView(card, style) {
   const lines = [];
+  // lowest 가 없으면 경매장을 읽지 못한 것이고, price 가 null 이면 읽었지만 매물이 없는 것이다.
   lines.push(
-    card.lowest?.price != null
-      ? `최저가 **${won(card.lowest.price)}** · 매물 ${won(card.lowest.listings)}개`
-      : "지금 올라온 매물이 없습니다.",
+    !card.lowest
+      ? "지금 최저가를 읽지 못했습니다."
+      : card.lowest.price != null
+        ? `최저가 **${won(card.lowest.price)}** · 매물 ${won(card.lowest.listings)}개`
+        : "지금 올라온 매물이 없습니다.",
   );
   if (card.day) lines.push(`24시간 거래 ${won(card.day.n)}건, 중위가 **${won(card.day.mid)}**`);
   if (card.change) {
