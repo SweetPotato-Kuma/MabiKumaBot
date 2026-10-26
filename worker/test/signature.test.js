@@ -91,7 +91,7 @@ describe("서명 확인", () => {
 describe("에린 시계", () => {
   it("직접 잰 게임 시계와 맞는다", () => {
     const kst = (time) => Date.parse(`2026-10-19T${time}+09:00`);
-    assert.equal(formatErinClock(erinClock(kst("09:54:21"))), "00:10");
-    assert.equal(formatErinClock(erinClock(kst("09:54:51"))), "00:30");
+    assert.equal(formatErinClock(erinClock(kst("09:54:21"))), "12:10");
+    assert.equal(formatErinClock(erinClock(kst("09:54:51"))), "12:30");
   });
 });

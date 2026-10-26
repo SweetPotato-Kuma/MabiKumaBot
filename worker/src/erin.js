@@ -12,7 +12,7 @@ const SPEED = ERIN_DAY_MS / ERIN_DAY_REAL_MS;
  * 게임 안 시계와 대조해 보정한 값(현실 ms).
  * 2026-10-19 한국 시각 09:54:21 에 00:10, 09:54:50 에 00:30 으로 바뀌는 것을 재서 맞췄다.
  */
-export const ERIN_OFFSET_MS = 1_074_500;
+export const ERIN_OFFSET_MS = 2_154_500;
 
 export function erinClock(now) {
   const erinMs = ((((now + ERIN_OFFSET_MS) * SPEED) % ERIN_DAY_MS) + ERIN_DAY_MS) % ERIN_DAY_MS;
