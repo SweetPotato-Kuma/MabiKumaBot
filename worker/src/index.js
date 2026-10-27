@@ -1,4 +1,5 @@
 import { runArbeitAlerts, runSearchAlerts } from "./alerts.js";
+import { runDailyAlerts } from "./daily.js";
 import { handleInteraction } from "./commands.js";
 import { readVerifiedBody } from "./verify.js";
 
@@ -49,6 +50,7 @@ export async function runScheduled(env, scheduledTime, budgetMs = SEARCH_BUDGET_
       (error) => console.error(JSON.stringify({ [name]: String(error?.message ?? error) })),
     );
   await run("arbeit", runArbeitAlerts);
+  await run("daily", runDailyAlerts);
   let timer;
   const deadline = new Promise((resolve) => {
     timer = setTimeout(() => {
