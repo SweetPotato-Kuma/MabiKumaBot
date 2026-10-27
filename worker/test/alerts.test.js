@@ -121,6 +121,24 @@ describe("알림 보내기", () => {
       ]);
     });
 
+    it("다른 봇이 만든 DM 채널이라 접근할 수 없으면(50001) 새로 만들어 다시 보낸다", async () => {
+      site.due = [alert({ dmChannelId: "800000000000000002" })];
+      script = (url) =>
+        url.endsWith("/channels/800000000000000002/messages")
+          ? respond(403, { code: 50001 })
+          : respond(200, { id: "900000000000000001" });
+
+      const summary = await runArbeitAlerts(env, 1_700_000_060_000);
+      assert.equal(summary.sent, 1);
+      assert.equal(requests[1].url.endsWith("/users/@me/channels"), true);
+      assert.equal(requests[2].url.endsWith("/channels/900000000000000001/messages"), true);
+      assert.deepEqual(site.calls.find((c) => c[0] === "updateSettings"), [
+        "updateSettings",
+        ALICE,
+        { dmChannelId: "900000000000000001" },
+      ]);
+    });
+
     it("기억해 둔 채널이 사라졌으면 새로 만들어 다시 보낸다", async () => {
       site.due = [alert({ dmChannelId: "800000000000000002" })];
       let first = true;

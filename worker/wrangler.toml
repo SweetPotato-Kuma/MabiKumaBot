@@ -21,7 +21,28 @@ service = "mabikuma-api"
 entrypoint = "BotService"
 
 [vars]
-# 공개 식별자와 서명 확인용 공개 키라 비밀이 아니다. 봇 토큰(DISCORD_BOT_TOKEN)은 여기에 적지 않고 시크릿으로 넣는다:
-#   npx wrangler secret bulk .dev.vars   (또는 npx wrangler secret put DISCORD_BOT_TOKEN)
+# 운영 앱 "구마봇". 공개 식별자와 서명 확인용 공개 키라 비밀이 아니다. 봇 토큰(DISCORD_BOT_TOKEN)은 여기에 적지 않고 시크릿으로 넣는다:
+#   npx wrangler secret put DISCORD_BOT_TOKEN
+DISCORD_APPLICATION_ID = "1510229054274670722"
+DISCORD_PUBLIC_KEY = "250e9a09466c73e7a450e6777fb32b35c3749b6702a401eee884bf0daf9605bd"
+
+# 테스트 앱 "구마봇 테스트": 화면을 먼저 확인하는 Worker. 예약 실행(알림)은 하지 않는다.
+# 같은 사이트 데이터를 쓰므로 알림까지 돌리면 운영 봇과 같은 사람에게 두 번 간다.
+#   npx wrangler deploy --env test
+#   npx wrangler secret bulk .dev.vars --env test
+[env.test]
+name = "mabikuma-bot-test"
+workers_dev = true
+preview_urls = false
+
+[env.test.triggers]
+crons = []
+
+[[env.test.services]]
+binding = "SITE"
+service = "mabikuma-api"
+entrypoint = "BotService"
+
+[env.test.vars]
 DISCORD_APPLICATION_ID = "1561556529654796408"
 DISCORD_PUBLIC_KEY = "dff90cb1ad238f14685634e4daa88e8fe3884f03dcfebfc9dc41a943b3dfba12"
