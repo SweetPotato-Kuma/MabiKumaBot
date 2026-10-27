@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 
-import { runArbeitAlerts, runSearchAlerts } from "../src/alerts.js";
+import { runArbeitAlerts, runCleanups, runSearchAlerts } from "../src/alerts.js";
+import { msUntilShopReset } from "../src/erin.js";
 import { CONSENT_VERSION } from "../src/commands.js";
 import { chunkMessages, searchAlertMessages } from "../src/format.js";
 import worker, { runScheduled } from "../src/index.js";
@@ -37,7 +38,12 @@ describe("알림 보내기", () => {
     requests = [];
     script = () => respond(200, { id: "900000000000000001" });
     globalThis.fetch = async (url, init) => {
-      requests.push({ url: String(url), body: JSON.parse(init.body), auth: init.headers.authorization });
+      requests.push({
+        url: String(url),
+        method: init.method ?? "GET",
+        body: init.body ? JSON.parse(init.body) : null,
+        auth: init.headers.authorization,
+      });
       return script(String(url));
     };
     await site.registerUser(ALICE, CONSENT_VERSION);
@@ -78,7 +84,17 @@ describe("알림 보내기", () => {
       assert.equal(requests[0].auth, "Bot test-token");
       assert.equal(requests[1].url.endsWith("/channels/900000000000000001/messages"), true);
       assert.match(requests[1].body.content, /• 성당\(각 마을\)\n• 식료품점\(각 마을\)/);
-      assert.match(requests[1].body.content, /\/마비쿠마 의 알림 설정/);
+      assert.doesNotMatch(requests[1].body.content, /알림 설정/);
+      assert.deepEqual(site.calls.find((c) => c[0] === "scheduleCleanup"), [
+        "scheduleCleanup",
+        [
+          {
+            channelId: "900000000000000001",
+            messageId: "900000000000000001",
+            deleteAt: 1_700_000_060_000 + msUntilShopReset(1_700_000_060_000),
+          },
+        ],
+      ]);
       assert.deepEqual(site.calls.find((c) => c[0] === "updateSettings"), [
         "updateSettings",
         ALICE,
@@ -282,5 +298,53 @@ describe("알림 보내기", () => {
 
     assert.deepEqual(order, ["arbeit", "searches"]);
     assert.ok(Date.now() - started < 1000);
+  });
+});
+
+describe("때가 지난 알림 지우기", () => {
+  const realFetch = globalThis.fetch;
+  let site;
+  let deleted;
+  beforeEach(() => {
+    site = fakeSite();
+    deleted = [];
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  it("아르바이트 알림은 그 에린 하루가 끝나는 에린 자정에 지운다", () => {
+    const at = 1_700_000_060_000;
+    const end = at + msUntilShopReset(at);
+    assert.ok(end > at && end - at <= 36 * 60_000);
+    assert.equal(msUntilShopReset(end), 36 * 60_000);
+  });
+
+  it("지운 것과 이미 없거나 지울 수 없는 것은 끝내고, 바쁘다고 하면 다음 분에 다시 한다", async () => {
+    site.cleanup = [
+      { channelId: "800000000000000002", messageId: "900000000000000001", deleteAt: 0 },
+      { channelId: "800000000000000002", messageId: "900000000000000002", deleteAt: 0 },
+      { channelId: "444444444444444444", messageId: "900000000000000003", deleteAt: 0 },
+      { channelId: "800000000000000002", messageId: "900000000000000004", deleteAt: 0 },
+    ];
+    const statusOf = { "900000000000000001": 204, "900000000000000002": 404, "900000000000000003": 403, "900000000000000004": 500 };
+    globalThis.fetch = async (url, init) => {
+      const id = String(url).split("/").at(-1);
+      deleted.push([init.method, String(url)]);
+      return new Response(null, { status: statusOf[id] });
+    };
+
+    const summary = await runCleanups({ SITE: site, DISCORD_BOT_TOKEN: "t" });
+    assert.deepEqual(summary, { due: 4, deleted: 3, failed: 1 });
+    assert.ok(deleted.every(([method]) => method === "DELETE"));
+    assert.ok(deleted[0][1].endsWith("/channels/800000000000000002/messages/900000000000000001"));
+    assert.deepEqual(site.cleanup.map((each) => each.messageId), ["900000000000000004"]);
+  });
+
+  it("지울 것이 없으면 디스코드를 부르지 않는다", async () => {
+    globalThis.fetch = async () => {
+      throw new Error("부르면 안 됨");
+    };
+    assert.equal(await runCleanups({ SITE: site, DISCORD_BOT_TOKEN: "t" }), null);
   });
 });

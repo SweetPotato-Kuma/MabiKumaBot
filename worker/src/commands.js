@@ -1,4 +1,5 @@
 import { editOriginal } from "./discord.js";
+import { DEFAULT_HOUR, dailyComponent, dailySettingsView, guildComponent, isGuildAdmin } from "./daily.js";
 import { openPrice, priceComponent, priceModal, priceModalSubmit } from "./price.js";
 import { savedComponent, savedList } from "./saved.js";
 import {
@@ -89,11 +90,11 @@ async function personal(env, uid, target, open) {
   return open(user);
 }
 
-async function openTarget(env, uid, target, now) {
+async function openTarget(env, uid, target, now, interaction) {
   switch (target) {
     case "menu": {
       const user = await env.SITE.getUser(uid);
-      return update(menuView(user ? await overview(env, uid, user) : null));
+      return update(menuView(user ? await overview(env, uid, user) : null, { guildAdmin: isGuildAdmin(interaction) }));
     }
     // 예전 메뉴의 경매장 검색 단추도 시세 보기로 잇는다.
     case "search":
@@ -161,6 +162,14 @@ async function settingsComponent(env, interaction, act, values) {
       { id: "end", label: "끝 시각 (한국 시각 0~23)", max: 2, placeholder: "예: 7" },
     ]);
   }
+  if (act === "daily") return update(dailySettingsView(user.settings));
+  if (act === "dailyr") {
+    return update(dailySettingsView(await env.SITE.updateSettings(uid, { dailyRemind: user.settings.dailyRemind === false })));
+  }
+  if (act === "dailyon" || act === "dailyoff" || act === "dailyh") {
+    const daily = act === "dailyoff" ? null : act === "dailyon" ? DEFAULT_HOUR : Number(values[0]);
+    return update(dailySettingsView(await env.SITE.updateSettings(uid, { daily })));
+  }
   let patch = {};
   if (act === "digest") patch = { digest: !user.settings.digest };
   if (act === "pause") patch = { paused: !user.settings.paused };
@@ -203,11 +212,11 @@ async function componentResponse(env, interaction, now) {
   let result = null;
   switch (namespace) {
     case "m":
-      return openTarget(env, uid, act, now);
+      return openTarget(env, uid, act, now, interaction);
     case "c":
       if (!PERSONAL_TARGETS.has(rest)) return update(menuView(null));
       await env.SITE.registerUser(uid, CONSENT_VERSION);
-      return openTarget(env, uid, rest, now);
+      return openTarget(env, uid, rest, now, interaction);
     case "q":
       // 봇의 경매장 검색 화면(q:, k:)은 뺐다. 예전 메시지의 단추는 만료로 안내한다.
       break;
@@ -219,6 +228,12 @@ async function componentResponse(env, interaction, now) {
       break;
     case "a":
       result = await arbeitComponent(env, interaction, act, rest, values);
+      break;
+    case "d":
+      result = await dailyComponent(env, interaction, act);
+      break;
+    case "g":
+      result = await guildComponent(env, interaction, act, values);
       break;
     case "s":
       return settingsComponent(env, interaction, act, values);
@@ -262,7 +277,7 @@ async function slash(env, interaction) {
     return deferred("new", () => openPrice(env, uid, name));
   }
   const user = await env.SITE.getUser(uid);
-  return newMessage(menuView(user ? await overview(env, uid, user) : null));
+  return newMessage(menuView(user ? await overview(env, uid, user) : null, { guildAdmin: isGuildAdmin(interaction) }));
 }
 
 async function autocomplete(env, interaction) {

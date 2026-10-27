@@ -208,6 +208,20 @@ export function fakeSite() {
       calls.push(["dueSearchAlerts", minuteIndex]);
       return site.searchDue;
     },
+    cleanup: [],
+    async scheduleCleanup(items) {
+      calls.push(["scheduleCleanup", items]);
+      site.cleanup.push(...items);
+      return { saved: items.length };
+    },
+    async dueCleanups() {
+      return site.cleanup.map(({ channelId, messageId }) => ({ channelId, messageId }));
+    },
+    async finishCleanups(items) {
+      calls.push(["finishCleanups", items]);
+      site.cleanup = site.cleanup.filter((each) => !items.some((done) => done.messageId === each.messageId));
+      return { removed: items.length };
+    },
   };
   return site;
 }

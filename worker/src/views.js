@@ -1,3 +1,4 @@
+import { hourLabel } from "./daily.js";
 import { erinClock, formatErinClock, formatShopReset, msUntilShopReset } from "./erin.js";
 import { relativeTime } from "./format.js";
 import {
@@ -26,7 +27,8 @@ const SITE_URL = "https://mabi.spkuma.com/?ref=bot";
 
 
 /** 메뉴. 동의한 사용자에게는 지금 상태를 한 줄로 보여 준다. */
-export function menuView(overview) {
+/** 메뉴. 서버 관리자가 서버에 설치된 봇을 열면 서버 설정 단추가 더해진다. */
+export function menuView(overview, { guildAdmin = false } = {}) {
   const lines = ["**마비쿠마**", "원하는 기능을 눌러 주세요."];
   if (overview) {
     const state = overview.paused ? "알림 일시정지" : "알림 켜짐";
@@ -39,7 +41,12 @@ export function menuView(overview) {
       button("m:ab", "아르바이트 알림"),
       button("m:erin", "에린 시계"),
     ),
-    row(button("m:set", "알림 설정"), button("m:me", "내 정보"), linkButton("사이트 열기", SITE_URL)),
+    row(
+      button("m:set", "알림 설정"),
+      button("m:me", "내 정보"),
+      guildAdmin ? button("g:open", "서버 설정") : null,
+      linkButton("사이트 열기", SITE_URL),
+    ),
   ]);
 }
 
@@ -141,6 +148,7 @@ export function describeSettings(settings) {
   parts.push(
     settings.quiet ? `조용한 시간 ${settings.quiet.start}시~${settings.quiet.end}시` : "조용한 시간 없음",
   );
+  parts.push(Number.isInteger(settings.daily) ? `매일 알림 ${hourLabel(settings.daily)}` : "매일 알림 꺼짐");
   if (settings.disabledReason === "dm-failed") {
     parts.push("DM을 보낼 수 없어 멈춤 (DM을 허용한 뒤 일시정지를 끄세요)");
   } else if (settings.paused) {
@@ -170,7 +178,7 @@ export function settingsView(settings) {
     [
       "**알림 설정**",
       describeSettings(settings),
-      "-# 시간은 한국 시각 기준이며 아르바이트와 새 매물 알림 모두에 적용됩니다.",
+      "-# 시간은 한국 시각 기준이며 아르바이트, 새 매물, 자정 전 알림에 적용됩니다.",
     ].join("\n"),
     [
       row(
@@ -178,7 +186,7 @@ export function settingsView(settings) {
         button("s:pause", settings.paused ? "일시정지: 켜짐" : "일시정지: 꺼짐", settings.paused ? DANGER : SECONDARY),
       ),
       row(select("s:quiet", "조용한 시간", options)),
-      row(button("s:custom", "조용한 시간 직접 입력"), menuButton()),
+      row(button("s:custom", "조용한 시간 직접 입력"), button("s:daily", "매일 알림"), menuButton()),
     ],
   );
 }

@@ -1,4 +1,5 @@
-import { runArbeitAlerts, runSearchAlerts } from "./alerts.js";
+import { runArbeitAlerts, runCleanups, runSearchAlerts } from "./alerts.js";
+import { runDailyAlerts } from "./daily.js";
 import { handleInteraction } from "./commands.js";
 import { readVerifiedBody } from "./verify.js";
 
@@ -31,7 +32,7 @@ export default {
   },
 
   /**
-   * 1분마다 깨어나 보고 가능해진 아르바이트와 목표 가격에 닿은 저장 검색을 알린다.
+   * 1분마다 깨어나 보고 가능해진 아르바이트, 매일 알림, 새 매물이 올라온 저장 검색을 알리고 때가 지난 알림을 지운다.
    * 한 번의 실행이 길어지면 뒤의 예약 실행이 수십 분씩 밀려 아르바이트 알림이 늦게 간다(2026-10-26 확인).
    * 그래서 아르바이트를 먼저 끝내고, 넥슨을 읽는 저장 검색은 정해진 시간 안에서만 기다린다.
    */
@@ -49,6 +50,8 @@ export async function runScheduled(env, scheduledTime, budgetMs = SEARCH_BUDGET_
       (error) => console.error(JSON.stringify({ [name]: String(error?.message ?? error) })),
     );
   await run("arbeit", runArbeitAlerts);
+  await run("daily", runDailyAlerts);
+  await run("cleanup", runCleanups);
   let timer;
   const deadline = new Promise((resolve) => {
     timer = setTimeout(() => {
