@@ -163,6 +163,9 @@ async function settingsComponent(env, interaction, act, values) {
     ]);
   }
   if (act === "daily") return update(dailySettingsView(user.settings));
+  if (act === "dailyr") {
+    return update(dailySettingsView(await env.SITE.updateSettings(uid, { dailyRemind: user.settings.dailyRemind === false })));
+  }
   if (act === "dailyon" || act === "dailyoff" || act === "dailyh") {
     const daily = act === "dailyoff" ? null : act === "dailyon" ? DEFAULT_HOUR : Number(values[0]);
     return update(dailySettingsView(await env.SITE.updateSettings(uid, { daily })));

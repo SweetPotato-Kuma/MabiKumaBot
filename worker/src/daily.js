@@ -1,9 +1,11 @@
 import { createDmChannel, isChannelGone, isDmBlocked, sendMessage } from "./discord.js";
 import { appEmojis, emojiOf, syncEmojis } from "./emojis.js";
+import { scheduleCleanup } from "./alerts.js";
 import {
   ACCENT,
   PRIMARY,
   SECONDARY,
+  SUCCESS,
   button,
   menuButton,
   newMessage,
@@ -21,6 +23,8 @@ import {
  */
 
 export const DEFAULT_HOUR = 7;
+/** 오늘 상자를 자정 전에 한 번 더 알리는 시각(한국 시각, 고정). 사이트의 REMIND_HOUR 와 같다. */
+export const REMIND_HOUR = 23;
 const MANAGE_GUILD = 1n << 5n;
 const ADMINISTRATOR = 1n << 3n;
 const TEXT_CHANNELS = [0, 5];
@@ -53,6 +57,17 @@ export function dailyView(card, emojis, { footer, channel = false } = {}) {
   );
 }
 
+/** 자정 전 알림: 오늘 상자를 한 번 더. 자정에 지운다. */
+export function reminderView(card, emojis) {
+  return view("", [], [
+    {
+      author: { name: "오늘 상자는 자정까지" },
+      color: ACCENT,
+      description: card.box.items.map((item) => `${emojiOf(emojis, item.key)}${item.name} ${item.count}개`).join("\n"),
+    },
+  ]);
+}
+
 /** 요일 보너스 보기: 일주일치 요일 보너스만. */
 export function bonusView(card) {
   return view("", [], [
@@ -76,22 +91,29 @@ const hourOptions = (selected) =>
     default: hour === selected,
   }));
 
-/** 개인 매일 알림 설정. 꺼져 있으면 켜기 단추(오전 7시), 켜져 있으면 시각 고르기와 끄기. */
+/**
+ * 개인 매일 알림 설정. 꺼져 있으면 켜기 단추(오전 7시), 켜져 있으면 시각 고르기, 자정 전 알림 켜고 끄기, 끄기.
+ * 자정 전 알림은 매일 알림을 켜면 함께 켜져 있다(설정 dailyRemind 기본값 true).
+ */
 export function dailySettingsView(settings) {
   const on = Number.isInteger(settings.daily);
+  const remind = settings.dailyRemind !== false;
+  const state = on ? `${hourLabel(settings.daily)}에 DM${remind ? ` · 자정 전 알림 ${hourLabel(REMIND_HOUR)}` : ""}` : "꺼짐";
   return view(
-    `**매일 알림** ${on ? `${hourLabel(settings.daily)}에 DM` : "꺼짐"}\n-# 요일 보너스는 자정, 어드밴스드 상자는 오전 7시에 바뀝니다.`,
+    `**매일 알림** ${state}\n-# 요일 보너스는 자정, 어드밴스드 상자는 오전 7시에 바뀝니다.`,
     [
       on ? row(select("s:dailyh", "받을 시각", hourOptions(settings.daily))) : row(),
       row(
+        on ? button("s:dailyr", remind ? "자정 전 알림: 켜짐" : "자정 전 알림: 꺼짐", remind ? SUCCESS : SECONDARY) : null,
         on ? button("s:dailyoff", "끄기") : button("s:dailyon", `${hourLabel(DEFAULT_HOUR)}에 받기`, PRIMARY),
         button("d:preview", "지금 미리 보기"),
-        button("m:set", "← 알림 설정"),
-        menuButton(),
       ),
+      row(button("m:set", "← 알림 설정"), menuButton()),
     ],
   );
 }
+
+const KST_OFFSET_MS = 9 * 3600 * 1000;
 
 // ---------- 서버 설정 ----------
 /** 이 상호작용을 한 사람이 서버 관리 권한을 가졌는지. 서버에 설치된 봇에서만 서버 설정을 연다. */
@@ -106,7 +128,7 @@ export function guildSettingsView(guild, note = "") {
   const { dailyChannelId: channel, dailyHour: hour } = guild.settings;
   return view(
     [
-      `**서버 설정** ${channel ? `<#${channel}> 에 ${hourLabel(hour)}` : "매일 알림 꺼짐"}`,
+      `**서버 설정** ${channel ? `<#${channel}> 에 ${hourLabel(hour)} · 자정 전 알림 ${hourLabel(REMIND_HOUR)}` : "매일 알림 꺼짐"}`,
       "-# 서버 관리자에게만 보입니다. 고른 채널에 매일 요일 보너스와 어드밴스드 상자 카드를 올립니다.",
       ...(note ? [note] : []),
     ].join("\n"),
@@ -135,6 +157,14 @@ async function postToChannel(env, channelId, card, hour) {
   const emojis = await appEmojis(env);
   const body = dailyView(card, emojis, { footer: `매일 ${hourLabel(hour)} 알림`, channel: true });
   return sendMessage(env, channelId, { embeds: body.embeds, components: body.components });
+}
+
+/** at 뒤에 처음 오는 한국 시각 hour 시 정각. */
+export function nextKstHour(at, hour) {
+  const kst = new Date(at + KST_OFFSET_MS);
+  let next = Date.UTC(kst.getUTCFullYear(), kst.getUTCMonth(), kst.getUTCDate(), hour) - KST_OFFSET_MS;
+  if (next <= at) next += 24 * 3600 * 1000;
+  return next;
 }
 
 const cannotWrite = (result) => !result.ok && [403, 404].includes(result.status);
@@ -187,7 +217,6 @@ export async function dailyComponent(env, interaction, act) {
 }
 
 // ---------- 정한 시각에 보내기 ----------
-const KST_OFFSET_MS = 9 * 3600 * 1000;
 
 async function deliverDm(env, user, message) {
   let channelId = user.dmChannelId;
@@ -202,13 +231,49 @@ async function deliverDm(env, user, message) {
     const created = await createDmChannel(env, user.discordUserId);
     if (!created.ok) return created;
     await env.SITE.updateSettings(user.discordUserId, { dmChannelId: created.data.id });
-    result = await sendMessage(env, created.data.id, message);
+    channelId = created.data.id;
+    result = await sendMessage(env, channelId, message);
   }
-  return result;
+  return { ...result, channelId };
+}
+
+/**
+ * 받을 사람(DM)과 서버 채널에 같은 카드를 보내고, 보낸 메시지는 deleteAt 에 지우도록 맡긴다.
+ * DM 을 막은 사람은 알림을 멈추고, 봇이 쓸 수 없는 서버 채널은 그 서버의 매일 알림을 끈다.
+ */
+async function deliverAll(env, due, dm, toChannel, deleteAt) {
+  const summary = { users: due.users.length, guilds: due.guilds.length, sent: 0, failed: 0, stopped: 0 };
+  const cleanup = [];
+  const keep = (channelId, result) => {
+    if (result.data?.id) cleanup.push({ channelId, messageId: result.data.id, deleteAt });
+  };
+  for (const user of due.users) {
+    const result = await deliverDm(env, user, dm).catch(() => ({ ok: false }));
+    if (result.ok) {
+      summary.sent += 1;
+      keep(result.channelId, result);
+    } else if (isDmBlocked(result)) {
+      await env.SITE.markDmFailed(user.discordUserId);
+      summary.stopped += 1;
+    } else summary.failed += 1;
+  }
+  for (const guild of due.guilds) {
+    const result = await toChannel(guild).catch(() => ({ ok: false }));
+    if (result.ok) {
+      summary.sent += 1;
+      keep(guild.channelId, result);
+    } else if (cannotWrite(result)) {
+      await env.SITE.stopGuildDaily(guild.guildId);
+      summary.stopped += 1;
+    } else summary.failed += 1;
+  }
+  await scheduleCleanup(env, cleanup);
+  return summary;
 }
 
 /**
  * 한국 시각 정각(분 0)에만 돈다. 그 시에 받을 사람과 서버를 사이트에서 받아 카드를 보낸다.
+ * 카드는 상자가 바뀌는 다음 오전 7시에 지운다. 오후 11시에는 자정 전 알림을 보내고 자정에 지운다.
  * 이모지가 아직 없는 구성품은 먼저 만들어 둔다(봇마다 자기 앱에 만든다).
  */
 export async function runDailyAlerts(env, scheduledTime) {
@@ -216,28 +281,33 @@ export async function runDailyAlerts(env, scheduledTime) {
   if (kst.getUTCMinutes() !== 0) return null;
   const hour = kst.getUTCHours();
   const due = await env.SITE.dueDailyDigests(hour);
-  const summary = { users: due.users.length, guilds: due.guilds.length, sent: 0, failed: 0, stopped: 0 };
-  if (!due.card) return summary;
+  let summary = { users: due.users.length, guilds: due.guilds.length, sent: 0, failed: 0, stopped: 0 };
+  if (due.card) {
+    await syncEmojis(env, due.card.box.items);
+    const emojis = await appEmojis(env);
+    const personal = dailyView(due.card, emojis, { footer: `매일 ${hourLabel(hour)} 알림` });
+    const dm = { embeds: personal.embeds, components: personal.components };
+    summary = await deliverAll(
+      env,
+      due,
+      dm,
+      (guild) => postToChannel(env, guild.channelId, due.card, hour),
+      nextKstHour(scheduledTime, DEFAULT_HOUR),
+    );
+  }
+  if (hour !== REMIND_HOUR) return summary;
 
-  await syncEmojis(env, due.card.box.items);
-  const emojis = await appEmojis(env);
-  const personal = dailyView(due.card, emojis, { footer: `매일 ${hourLabel(hour)} 알림` });
-  const dm = { embeds: personal.embeds, components: personal.components };
-  for (const user of due.users) {
-    const result = await deliverDm(env, user, dm).catch(() => ({ ok: false }));
-    if (result.ok) summary.sent += 1;
-    else if (isDmBlocked(result)) {
-      await env.SITE.markDmFailed(user.discordUserId);
-      summary.stopped += 1;
-    } else summary.failed += 1;
-  }
-  for (const guild of due.guilds) {
-    const result = await postToChannel(env, guild.channelId, due.card, hour).catch(() => ({ ok: false }));
-    if (result.ok) summary.sent += 1;
-    else if (cannotWrite(result)) {
-      await env.SITE.stopGuildDaily(guild.guildId);
-      summary.stopped += 1;
-    } else summary.failed += 1;
-  }
-  return summary;
+  const remind = await env.SITE.dueDailyReminders();
+  if (!remind.card) return { ...summary, reminders: { users: 0, guilds: 0, sent: 0, failed: 0, stopped: 0 } };
+  await syncEmojis(env, remind.card.box.items);
+  const body = reminderView(remind.card, await appEmojis(env));
+  const message = { embeds: body.embeds };
+  const reminders = await deliverAll(
+    env,
+    remind,
+    message,
+    (guild) => sendMessage(env, guild.channelId, message),
+    nextKstHour(scheduledTime, 0),
+  );
+  return { ...summary, reminders };
 }

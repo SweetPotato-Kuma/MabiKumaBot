@@ -39,6 +39,24 @@ export function sendMessage(env, channelId, message) {
   return call(env, `/channels/${channelId}/messages`, body);
 }
 
+/** 봇이 보낸 메시지를 지운다. 이미 없으면 404, 지울 수 없는 곳이면 403 이다. */
+export async function deleteMessage(env, channelId, messageId) {
+  const request = () =>
+    fetch(`${API}/channels/${channelId}/messages/${messageId}`, {
+      method: "DELETE",
+      headers: { authorization: `Bot ${env.DISCORD_BOT_TOKEN}` },
+    });
+  let response = await request();
+  if (response.status === 429) {
+    const wait = Number((await response.json().catch(() => ({}))).retry_after) * 1000;
+    if (Number.isFinite(wait) && wait <= MAX_RETRY_WAIT_MS) {
+      await sleep(wait);
+      response = await request();
+    }
+  }
+  return { ok: response.ok, status: response.status };
+}
+
 /** 받는 사람이 DM 을 막았거나 서버를 함께 쓰지 않아 더 시도해도 소용없는 실패인지. */
 export function isDmBlocked(result) {
   return !result.ok && (result.code === 50007 || result.code === 50278);

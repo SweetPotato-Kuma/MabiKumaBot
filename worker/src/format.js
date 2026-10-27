@@ -10,9 +10,7 @@ const seconds = (ms) => Math.floor(ms / 1000);
 /** 디스코드가 "3분 전"처럼 상대 시각으로 그려 주는 표기. */
 export const relativeTime = (ms) => `<t:${seconds(ms)}:R>`;
 
-const SETTINGS_HINT = "-# 알림 방식은 /마비쿠마 의 알림 설정에서 바꿀 수 있습니다.";
-
-/** 머리말, 줄 목록, 꼬리말을 길이에 맞게 여러 통으로 나눈다. 줄은 쪼개지 않는다. */
+/** 머리말, 줄 목록, 꼬리말(없으면 빈 글)을 길이에 맞게 여러 통으로 나눈다. 줄은 쪼개지 않는다. */
 export function chunkMessages(header, lines, footer) {
   const room = MAX_LENGTH - header.length - footer.length - 2;
   const chunks = [];
@@ -30,7 +28,7 @@ export function chunkMessages(header, lines, footer) {
   if (current.length > 0) {
     chunks.push(current);
   }
-  return chunks.map((part) => `${header}\n${part.join("\n")}\n${footer}`);
+  return chunks.map((part) => [header, ...part, ...(footer ? [footer] : [])].join("\n"));
 }
 
 export function arbeitMessages(alert) {
@@ -40,7 +38,7 @@ export function arbeitMessages(alert) {
   return chunkMessages(
     "**아르바이트 보고 가능**",
     alert.entries.map((entry) => `• ${entry.label}`),
-    SETTINGS_HINT,
+    "",
   );
 }
 

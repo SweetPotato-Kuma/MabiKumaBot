@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 
 import { CONSENT_VERSION } from "../src/commands.js";
-import { bonusView, dailyView, hourLabel, runDailyAlerts } from "../src/daily.js";
+import { bonusView, dailyView, hourLabel, nextKstHour, reminderView, runDailyAlerts } from "../src/daily.js";
 import { resetEmojisForTest } from "../src/emojis.js";
 import { ALICE, click, fakeSite, find, ids, run } from "./helpers.js";
 
@@ -92,7 +92,15 @@ describe("개인 매일 알림 설정", () => {
 
     const on = await run(site, click("s:dailyon"));
     assert.deepEqual(site.calls.at(-1), ["updateSettings", ALICE, { daily: 7 }]);
-    assert.match(on.view.content, /오전 7시에 DM/);
+    assert.match(on.view.content, /오전 7시에 DM · 자정 전 알림 오후 11시/);
+    assert.equal(find(on.view, "s:dailyr").label, "자정 전 알림: 켜짐");
+
+    const quiet = await run(site, click("s:dailyr"));
+    assert.deepEqual(site.calls.at(-1), ["updateSettings", ALICE, { dailyRemind: false }]);
+    assert.equal(find(quiet.view, "s:dailyr").label, "자정 전 알림: 꺼짐");
+    assert.doesNotMatch(quiet.view.content, /자정 전 알림 오후/);
+    await run(site, click("s:dailyr"));
+    assert.deepEqual(site.calls.at(-1), ["updateSettings", ALICE, { dailyRemind: true }]);
     assert.equal(find(on.view, "s:dailyh").options.find((o) => o.default).value, "7");
 
     await run(site, click("s:dailyh", ["21"]));
@@ -156,7 +164,9 @@ describe("정한 시각에 보내기", () => {
     globalThis.fetch = async (url, init = {}) => {
       requests.push({ url: String(url), method: init.method ?? "GET", body: init.body ? JSON.parse(init.body) : null });
       if (String(url).endsWith("/emojis")) return new Response(JSON.stringify({ items: [] }));
-      if (String(url).includes(`/channels/${CHANNEL}/`)) return new Response("{}", { status: channelStatus });
+      if (String(url).includes(`/channels/${CHANNEL}/`)) {
+        return new Response(JSON.stringify(channelStatus === 200 ? { id: "800000000000000010" } : {}), { status: channelStatus });
+      }
       return new Response(JSON.stringify({ id: "800000000000000009" }));
     };
   });
@@ -178,6 +188,40 @@ describe("정한 시각에 보내기", () => {
     assert.ok(requests.some((r) => r.url.endsWith("/channels/800000000000000002/messages")));
     const post = requests.find((r) => r.url.endsWith(`/channels/${CHANNEL}/messages`));
     assert.equal(post.body.embeds[0].footer.text, "매일 오전 7시 알림");
+    // 카드는 상자가 바뀌는 다음 날 오전 7시에 지운다(DM, 서버 채널 모두).
+    const tomorrow7 = at("2026-10-28T07:00:00");
+    assert.deepEqual(site.calls.find((c) => c[0] === "scheduleCleanup")[1], [
+      { channelId: "800000000000000002", messageId: "800000000000000009", deleteAt: tomorrow7 },
+      { channelId: CHANNEL, messageId: "800000000000000010", deleteAt: tomorrow7 },
+    ]);
+  });
+
+  it("오후 11시에는 자정 전 알림을 DM 과 서버 채널에 보내고 자정에 지운다", async () => {
+    site.dueDailyDigests = async () => ({ card: null, users: [], guilds: [] });
+    site.dueDailyReminders = async () => ({
+      card,
+      users: [{ discordUserId: ALICE, dmChannelId: "800000000000000002" }],
+      guilds: [{ guildId: GUILD, channelId: CHANNEL }],
+    });
+    const summary = await runDailyAlerts(env(), at("2026-10-27T23:00:00"));
+    assert.deepEqual(summary.reminders, { users: 1, guilds: 1, sent: 2, failed: 0, stopped: 0 });
+    const dm = requests.find((r) => r.url.endsWith("/channels/800000000000000002/messages"));
+    assert.equal(dm.body.embeds[0].author.name, "오늘 상자는 자정까지");
+    assert.equal(dm.body.components, undefined);
+    const midnight = at("2026-10-28T00:00:00");
+    assert.deepEqual(
+      site.calls.find((c) => c[0] === "scheduleCleanup")[1].map((each) => each.deleteAt),
+      [midnight, midnight],
+    );
+  });
+
+  it("오후 11시가 아니면 자정 전 알림을 찾지 않는다", async () => {
+    site.dueDailyDigests = async () => ({ card: null, users: [], guilds: [] });
+    site.dueDailyReminders = async () => {
+      throw new Error("부르면 안 됨");
+    };
+    const summary = await runDailyAlerts(env(), at("2026-10-27T22:00:00"));
+    assert.equal(summary.reminders, undefined);
   });
 
   it("봇이 서버 채널에 쓸 수 없으면 그 서버의 매일 알림을 끈다", async () => {
@@ -193,5 +237,21 @@ describe("정한 시각에 보내기", () => {
     site.dueDailyDigests = async () => ({ card: null, users: [], guilds: [] });
     assert.deepEqual(await runDailyAlerts(env(), at("2026-10-27T08:00:00")), { users: 0, guilds: 0, sent: 0, failed: 0, stopped: 0 });
     assert.equal(requests.length, 0);
+  });
+});
+
+describe("지울 시각과 자정 전 알림 카드", () => {
+  const at = (text) => Date.parse(`${text}+09:00`);
+  it("다음에 오는 한국 시각 정각을 고른다", () => {
+    assert.equal(nextKstHour(at("2026-10-27T07:00:00"), 7), at("2026-10-28T07:00:00"));
+    assert.equal(nextKstHour(at("2026-10-27T06:00:00"), 7), at("2026-10-27T07:00:00"));
+    assert.equal(nextKstHour(at("2026-10-27T23:00:00"), 0), at("2026-10-28T00:00:00"));
+  });
+
+  it("자정 전 알림은 오늘 상자만 아이콘과 함께 적는다", () => {
+    const body = reminderView(card, new Map([["mk_lunchbox", "<:mk_lunchbox:1>"]]));
+    assert.equal(body.embeds[0].author.name, "오늘 상자는 자정까지");
+    assert.equal(body.embeds[0].description, "대용량 축복의 포션 1개\n<:mk_lunchbox:1> 로나의 특제 도시락 1개");
+    assert.deepEqual(body.components, []);
   });
 });
