@@ -62,9 +62,13 @@ export function isDmBlocked(result) {
   return !result.ok && (result.code === 50007 || result.code === 50278);
 }
 
-/** 저장해 둔 DM 채널이 사라진 경우. 새로 만들어 다시 보낸다. */
+/**
+ * 저장해 둔 DM 채널을 쓸 수 없는 경우. 새로 만들어 다시 보낸다.
+ * 채널이 사라졌거나(404, 10003), 다른 봇이 만든 DM 채널이라 접근할 수 없는 경우(50001)다.
+ * 테스트 봇에서 운영 봇으로 바꿀 때 남은 채널 번호가 이렇게 된다.
+ */
 export function isChannelGone(result) {
-  return !result.ok && (result.status === 404 || result.code === 10003);
+  return !result.ok && (result.status === 404 || result.code === 10003 || result.code === 50001);
 }
 
 /**

@@ -10,4 +10,5 @@ runtime/
 
 # Cloudflare Worker
 .dev.vars
+.prod.vars
 .wrangler/
