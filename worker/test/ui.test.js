@@ -24,6 +24,18 @@ describe("명령 정의", () => {
     );
     assert.match(COMMANDS[0].options[0].description, /바로 시세/);
   });
+
+  it("서버에 들이지 않고 사용자 계정에 설치해도 DM 과 어디서든 쓸 수 있다", () => {
+    assert.deepEqual(COMMANDS[0].integration_types, [0, 1]);
+    assert.deepEqual(COMMANDS[0].contexts, [0, 1, 2]);
+  });
+
+  it("DM 에서 온 상호작용(user 만 있음)도 사용자로 알아본다", async () => {
+    const dm = { type: 2, token: "t", user: { id: ALICE }, data: { name: "마비쿠마", options: [] } };
+    const { initial } = await run(site, dm);
+    assert.equal(initial.type, 4);
+    assert.ok(find(initial.data, "m:price"));
+  });
 });
 
 describe("메뉴", () => {

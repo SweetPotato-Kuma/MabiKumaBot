@@ -49,12 +49,22 @@ const PERSONAL_TARGETS = new Set(["fav", "ab", "set", "me"]);
 /** 사이트 Worker 가 사용자에게 보여 줘도 되는 이유로 던진 오류. 나머지는 일반 안내로 바꾼다. */
 const SHOWN_ERRORS = /즐겨찾기|목표 가격|동의|검색어나 분류|이미 저장|찾지 못했|조건|숫자 범위|사이트에서|경매장|R 또는 S|펫 정보/;
 
-/** 디스코드에 등록하는 명령. `/마비쿠마` 하나로 열고 나머지는 모두 화면의 버튼과 메뉴로 한다. */
+/** 명령을 쓸 수 있는 설치 방식: 서버에 설치(0), 사용자 계정에 설치(1). */
+const INSTALL_GUILD_AND_USER = [0, 1];
+/** 명령을 쓸 수 있는 곳: 서버(0), 봇과의 DM(1), 사용자 설치로 들어간 DM·그룹 DM(2). */
+const ANYWHERE = [0, 1, 2];
+
+/**
+ * 디스코드에 등록하는 명령. `/마비쿠마` 하나로 열고 나머지는 모두 화면의 버튼과 메뉴로 한다.
+ * 개인 기능뿐이라 서버에 들이지 않고 사용자 계정에 설치해도 쓸 수 있게 한다(설치 방식을 비우면 등록 당시 앱 설정을 따라간다).
+ */
 export const COMMANDS = [
   {
     type: 1,
     name: "마비쿠마",
     description: "마비쿠마 메뉴 열기",
+    integration_types: INSTALL_GUILD_AND_USER,
+    contexts: ANYWHERE,
     options: [
       {
         type: STRING,
