@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import { runArbeitAlerts, runSearchAlerts } from "../src/alerts.js";
 import { CONSENT_VERSION } from "../src/commands.js";
 import { chunkMessages, searchAlertMessages } from "../src/format.js";
-import worker from "../src/index.js";
+import worker, { runScheduled } from "../src/index.js";
 import { ALICE, BOB, fakeSite } from "./helpers.js";
 
 const respond = (status, body = {}) => new Response(JSON.stringify(body), { status });
@@ -168,12 +168,12 @@ describe("알림 보내기", () => {
     });
   });
 
-  describe("저장 검색의 목표 가격", () => {
-    const found = (name, price) => ({
+  describe("저장 검색의 새 매물", () => {
+    const found = (name, price, newCount = 2) => ({
       id: 1,
       name,
-      price,
-      target: price + 10,
+      newCount,
+      icon: "https://icons.spkuma.com/f711.webp",
       total: 3,
       items: [
         { name: "롱 소드", price, count: 1, notes: ["세공 스매시 대미지 5레벨"] },
@@ -205,12 +205,17 @@ describe("알림 보내기", () => {
 
       assert.equal(summary.sent, 1);
       const [first, second] = requests[0].body.embeds;
-      assert.equal(first.title, "목표 가격 도달: 스매시 검");
-      assert.equal(first.url, "https://mabi.spkuma.com/auction?category=%EA%B2%80&ref=bot");
-      assert.match(first.description, /^최저 \*\*50,000\*\* \(목표 50,010\), 조건에 맞는 매물 3개\n\*\*1\.\*\* 50,000 롱 소드\n　세공 스매시 대미지 5레벨\n\*\*2\.\*\* 50,500 롱 소드 ×2$/);
+      assert.deepEqual(first.author, {
+        name: "스매시 검 · 새 매물 2개",
+        url: "https://mabi.spkuma.com/auction?category=%EA%B2%80&ref=bot",
+        icon_url: "https://icons.spkuma.com/f711.webp",
+      });
+      assert.equal(
+        first.description,
+        ["-# 세공 스매시 대미지 5레벨 이상", "**1.** 50,000 롱 소드", "　세공 스매시 대미지 5레벨", "**2.** 50,500 롱 소드 ×2"].join("\n"),
+      );
       assert.equal(first.timestamp, new Date(1_700_000_000_000).toISOString());
-      assert.match(first.footer.text, /알림 설정/);
-      assert.equal(second.title, "목표 가격 도달: 천옷");
+      assert.equal(second.author.name, "천옷 · 새 매물 2개");
     });
 
     it("묶어 받지 않는 사람은 검색마다 따로 받는다", async () => {
@@ -219,7 +224,12 @@ describe("알림 보내기", () => {
 
       assert.equal(summary.sent, 2);
       assert.equal(requests[0].body.embeds.length, 1);
-      assert.equal(requests[1].body.embeds[0].title, "목표 가격 도달: 천옷");
+      assert.equal(requests[1].body.embeds[0].author.name, "천옷 · 새 매물 2개");
+    });
+
+    it("자세히 보여 준 것보다 많으면 나머지 개수를 적는다", () => {
+      const [message] = searchAlertMessages(alert({ searches: [found("낙지", 4300, 37)] }));
+      assert.match(message.embeds[0].description, /\n외 35개$/);
     });
 
     it("카드가 10장을 넘으면 나눠 보낸다", () => {
@@ -252,5 +262,25 @@ describe("알림 보내기", () => {
       "dueSearchAlerts",
       Math.floor(1_700_000_120_000 / 60_000),
     ]);
+  });
+
+  it("아르바이트를 먼저 끝내고 저장 검색이 오래 걸리면 기다리지 않는다", async () => {
+    const order = [];
+    const slowSite = {
+      ...site,
+      async dueArbeitAlerts() {
+        order.push("arbeit");
+        return [];
+      },
+      dueSearchAlerts() {
+        order.push("searches");
+        return new Promise(() => {});
+      },
+    };
+    const started = Date.now();
+    await runScheduled({ ...env, SITE: slowSite }, 1_700_000_120_000, 30);
+
+    assert.deepEqual(order, ["arbeit", "searches"]);
+    assert.ok(Date.now() - started < 1000);
   });
 });

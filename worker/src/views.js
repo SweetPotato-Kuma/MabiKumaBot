@@ -34,8 +34,8 @@ export function menuView(overview) {
   }
   return view(lines.join("\n"), [
     row(
-      button("m:search", "경매장 검색", PRIMARY),
-      button("m:fav", "즐겨찾기"),
+      button("m:price", "시세 보기", PRIMARY),
+      button("m:fav", "즐겨찾기 알림"),
       button("m:ab", "아르바이트 알림"),
       button("m:erin", "에린 시계"),
     ),
@@ -48,7 +48,7 @@ export function consentView(target) {
   return view(
     [
       "**개인 기능을 켜려면 동의가 필요합니다.**",
-      "저장하는 정보: 디스코드 사용자 번호, 동의 시점, 알림 설정, 구독한 아르바이트 항목, 저장한 검색과 목표 가격",
+      "저장하는 정보: 디스코드 사용자 번호, 동의 시점, 알림 설정, 구독한 아르바이트 항목, 즐겨찾기 알림에 등록한 검색과 이미 알린 매물",
       "쓰는 곳: 알림을 DM으로 보내는 데에만 씁니다.",
       "지우는 방법: 메뉴의 내 정보에서 삭제",
       `자세한 내용: ${PRIVACY_URL}`,
@@ -170,7 +170,7 @@ export function settingsView(settings) {
     [
       "**알림 설정**",
       describeSettings(settings),
-      "-# 시간은 한국 시각 기준이며 아르바이트와 목표 가격 알림 모두에 적용됩니다.",
+      "-# 시간은 한국 시각 기준이며 아르바이트와 새 매물 알림 모두에 적용됩니다.",
     ].join("\n"),
     [
       row(

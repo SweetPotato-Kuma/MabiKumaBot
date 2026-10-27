@@ -1,4 +1,3 @@
-import { EMPTY_QUERY, renderSearch, searchCard, stateOf, stateUrl } from "./search.js";
 import {
   ACCENT,
   DANGER,
@@ -8,10 +7,6 @@ import {
   linkButton,
   menuButton,
   message,
-  modal,
-  newMessage,
-  noticeView,
-  parsePrice,
   row,
   select,
   update,
@@ -19,44 +14,60 @@ import {
   view,
   won,
 } from "./ui.js";
-import { consentView } from "./views.js";
 
-/** 저장한 검색(즐겨찾기) 화면. 저장 검색은 사이트 경매장과 같은 조건에 이름과 목표가를 더한 것이다. */
+/**
+ * 즐겨찾기 알림 화면. 사이트 경매장 즐겨찾기의 종 단추로 등록한 검색을 보고, 새 매물 알림을 켜고 끄고, 지운다.
+ * 검색 조건을 정하거나 고치는 일은 사이트에서 한다(봇에서 조건을 고르는 화면은 2026-10 에 뺐다).
+ */
 
 const MAX_SEARCHES = 20;
+const PAGE_SIZE = 10;
+const REGISTER_URL = "https://mabi.spkuma.com/auction?ref=bot";
 
-const summaryOf = (query) =>
+const summaryOf = (query, conditions) =>
   [
     query.keyword ? `"${query.keyword}"${query.exact ? " 정확히" : ""}` : "",
     query.category ? (query.category.startsWith("group:") ? `${query.category.slice(6)} 전체` : query.category) : "",
+    ...conditions,
   ]
     .filter(Boolean)
-    .join(" ");
+    .join(", ");
 
-/** 목록. 검색마다 최저가와 목표가를 한 줄로 보여 주고, 아래 선택 메뉴로 하나를 연다. */
-export function savedListView(status) {
-  const lines = status.searches.flatMap((search) => {
-    const price = search.unavailable ? "읽지 못함" : search.lowest === null ? "매물 없음" : `최저 **${won(search.lowest)}**`;
-    const target = search.targetPrice
-      ? ` / 목표 ${won(search.targetPrice)}${search.lowest !== null && search.lowest <= search.targetPrice ? " 이하" : ""}`
-      : "";
-    const detail = [summaryOf(search.query), search.conditions.length > 0 ? `상세 조건 ${search.conditions.length}개` : ""]
-      .filter(Boolean)
-      .join(", ");
-    return [`**${search.name}** ${price}${target}`, `　${detail}`];
-  });
-  const card = {
-    title: "내 즐겨찾기",
+const priceLine = (search) =>
+  search.unavailable
+    ? "지금 읽지 못했습니다."
+    : search.lowest === null
+      ? "매물 없음"
+      : `최저 **${won(search.lowest)}** · 매물 ${won(search.total)}개`;
+
+const author = (search) => ({
+  name: search.name.slice(0, 256),
+  url: search.url,
+  ...(search.icon ? { icon_url: search.icon } : {}),
+});
+
+/** 목록. 검색마다 작은 카드 한 장(아이콘, 최저가, 조건, 알림 상태)이고 한 쪽에 10개씩이다. */
+export function savedListView(status, page = 0) {
+  const total = status.searches.length;
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const current = Math.min(Math.max(0, Number(page) || 0), pages - 1);
+  const shown = status.searches.slice(current * PAGE_SIZE, (current + 1) * PAGE_SIZE);
+  const cards = shown.map((search) => ({
+    author: author(search),
     color: ACCENT,
-    description:
-      lines.length > 0 ? lines.join("\n").slice(0, 4000) : "저장한 검색이 없습니다. 새 검색에서 조건을 정한 뒤 즐겨찾기에 저장하세요.",
-    footer: { text: `${status.searches.length}/${MAX_SEARCHES}` },
-    timestamp: new Date(status.checkedAt).toISOString(),
-  };
+    description: [
+      priceLine(search),
+      `-# ${summaryOf(search.query, search.conditions)} · 새 매물 알림 ${search.alertOn ? "켜짐" : "꺼짐"}`,
+    ].join("\n"),
+  }));
+  const content =
+    total > 0
+      ? `**즐겨찾기 알림** ${total}/${MAX_SEARCHES}`
+      : "**즐겨찾기 알림**\n등록한 검색이 없습니다. 사이트 경매장 즐겨찾기의 종 단추로 등록하세요.";
   return view(
-    "",
+    content,
     [
-      status.searches.length > 0
+      total > 0
         ? row(
             select(
               "f:open",
@@ -64,15 +75,57 @@ export function savedListView(status) {
               status.searches.map((search) => ({
                 label: search.name,
                 value: String(search.id),
-                description: search.targetPrice ? `목표 ${won(search.targetPrice)}` : "목표가 없음",
+                description: `새 매물 알림 ${search.alertOn ? "켜짐" : "꺼짐"}`,
               })),
             ),
           )
         : row(),
       row(
-        button("f:new", "새 검색", PRIMARY),
-        button("f:imp", "사이트에서 가져오기"),
-        button("m:fav", "새로고침"),
+        ...(pages > 1
+          ? [
+              button(`f:pg:${current - 1}`, "← 이전", undefined, { disabled: current === 0 }),
+              button(`f:pg:${current + 1}`, "다음 →", undefined, { disabled: current === pages - 1 }),
+            ]
+          : []),
+        button(`f:pg:${current}`, "새로고침"),
+        linkButton("사이트에서 등록하기", REGISTER_URL),
+        menuButton(),
+      ),
+    ],
+    cards,
+  );
+}
+
+/** 검색 하나. 조건, 지금 최저가와 매물 몇 개, 알림 켜기/끄기, 지우기, 사이트에서 열기. */
+export function savedDetailView(search, result, note = "") {
+  const lines = [];
+  if (search.query.keyword) lines.push(`검색어 **${search.query.keyword}**${search.query.exact ? " (정확히 일치)" : ""}`);
+  if (search.query.category) {
+    const category = search.query.category;
+    lines.push(`분류 **${category.startsWith("group:") ? `${category.slice(6)} 전체` : category}**`);
+  }
+  if (search.conditions.length > 0) lines.push("상세 조건", ...search.conditions.map((each) => `• ${each}`));
+  lines.push("", priceLine({ ...result, unavailable: false }));
+  result.items.slice(0, 3).forEach((item, index) => {
+    const count = item.count > 1 ? ` ×${won(item.count)}` : "";
+    lines.push(`**${index + 1}.** ${won(item.price)} ${item.name}${count}`);
+    if (item.notes?.length > 0) lines.push(`　${item.notes.join(" / ")}`);
+  });
+  const card = {
+    author: author({ ...search, icon: result.icon }),
+    color: ACCENT,
+    description: lines.join("\n").slice(0, 4000),
+    footer: { text: `새 매물 알림 ${search.alertOn ? "켜짐" : "꺼짐"}` },
+    ...(result.checkedAt ? { timestamp: new Date(result.checkedAt).toISOString() } : {}),
+  };
+  return view(
+    note,
+    [
+      row(
+        button(`f:al:${search.id}:${search.alertOn ? 0 : 1}`, search.alertOn ? "새 매물 알림 끄기" : "새 매물 알림 켜기", search.alertOn ? undefined : PRIMARY),
+        button(`f:del:${search.id}`, "삭제", DANGER),
+        linkButton("사이트에서 열기", search.url),
+        button("f:pg:0", "← 목록"),
         menuButton(),
       ),
     ],
@@ -80,153 +133,53 @@ export function savedListView(status) {
   );
 }
 
-/** 저장 검색 하나. 결과 카드 위에 목표가 상태를 한 줄 더하고 고치기 단추를 단다. */
-export function savedDetailView(search, result, note = "") {
-  const card = searchCard(result, { sid: search.id, title: search.name });
-  const price = result.lowest;
-  const target = search.targetPrice
-    ? `목표 **${won(search.targetPrice)}**, ${price !== null && price <= search.targetPrice ? "지금 목표 이하입니다" : "아직 목표보다 비쌉니다"}`
-    : "목표가가 없어 알림이 오지 않습니다.";
-  card.description = `${target}\n\n${card.description}`.slice(0, 4000);
-  return view(
-    note,
-    [
-      row(
-        button(`f:meta:${search.id}`, "이름·목표가", PRIMARY),
-        button(`f:edit:${search.id}`, "조건 고치기"),
-        button(`f:off:${search.id}`, "목표가 끄기", undefined, { disabled: !search.targetPrice }),
-        button(`f:del:${search.id}`, "삭제", DANGER),
-      ),
-      row(button("q:share", "채널에 공유"), button(`f:show:${search.id}`, "새로고침"), button("f:list", "← 목록"), menuButton()),
-      row(linkButton("사이트에서 보기", stateUrl(result.query))),
-    ],
-    [card],
-  );
-}
-
 async function detail(env, uid, id, note) {
-  const { search, result } = await env.SITE.searchDetail(uid, Number(id), { limit: 8 });
+  const { search, result } = await env.SITE.searchDetail(uid, Number(id), { limit: 3 });
   return savedDetailView(search, result, note);
 }
 
-export async function savedList(env, uid) {
-  return savedListView(await env.SITE.searchesStatus(uid));
+export async function savedList(env, uid, page = 0) {
+  return savedListView(await env.SITE.searchesStatus(uid), page);
 }
 
 async function findSaved(env, uid, id) {
   return (await env.SITE.listSearches(uid)).find((search) => search.id === Number(id)) ?? null;
 }
 
-function importView(result) {
-  const lines = [
-    result.added.length > 0 ? `**사이트 즐겨찾기 ${result.added.length}개를 가져왔습니다.**` : "**가져온 즐겨찾기가 없습니다.**",
-    ...result.added.slice(0, 10).map((name) => `• ${name}`),
-  ];
-  if (result.existing > 0) lines.push(`이미 있는 검색 ${result.existing}개`);
-  if (result.invalid > 0) lines.push(`조건이 빈 검색 ${result.invalid}개는 건너뜀`);
-  if (result.full > 0) lines.push(`즐겨찾기가 가득 차 ${result.full}개는 가져오지 못했습니다.`);
-  return view(lines.join("\n"), [row(button("m:fav", "즐겨찾기 열기", PRIMARY), menuButton())]);
-}
-
-/** 저장 검색 화면의 단추와 선택 메뉴(f:). */
+/**
+ * 즐겨찾기 알림 화면의 단추와 선택 메뉴(f:).
+ * 예전 화면의 단추(새 검색, 사이트에서 가져오기, 조건·목표가 고치기)는 만료로 안내한다.
+ */
 export async function savedComponent(env, interaction, act, rest, values) {
   const uid = userIdOf(interaction);
-  const id = rest || values[0];
   switch (act) {
     case "open":
     case "show":
-      return deferred("update", () => detail(env, uid, id));
+      return deferred("update", () => detail(env, uid, rest || values[0]));
     case "list":
       return deferred("update", () => savedList(env, uid));
-    case "new":
-      return deferred("update", () => renderSearch(env, EMPTY_QUERY));
-    case "edit": {
-      const saved = await findSaved(env, uid, id);
-      if (!saved) return message("저장한 검색을 찾지 못했습니다.");
-      return deferred("update", () => renderSearch(env, saved.query, { sid: saved.id, title: `${saved.name} 고치는 중` }));
-    }
-    case "meta": {
-      const saved = await findSaved(env, uid, id);
-      if (!saved) return message("저장한 검색을 찾지 못했습니다.");
-      return modal(`f:metam:${saved.id}`, "이름과 목표가", [
-        { id: "name", label: "이름", max: 30, value: saved.name },
-        { id: "target", label: "목표가 (개당, 비우면 알림 끔)", required: false, max: 14, value: saved.targetPrice ? String(saved.targetPrice) : "", placeholder: "예: 4300" },
-      ]);
-    }
-    case "off": {
-      const saved = await findSaved(env, uid, id);
-      if (!saved) return message("저장한 검색을 찾지 못했습니다.");
-      await env.SITE.saveSearch(uid, { id: saved.id, ...saved.query, targetPrice: 0 });
-      return deferred("update", () => detail(env, uid, saved.id, "목표가를 껐습니다."));
+    case "pg":
+      return deferred("update", () => savedList(env, uid, Number(rest)));
+    case "al": {
+      const [id, on] = rest.split(":");
+      await env.SITE.setSearchAlert(uid, Number(id), on === "1");
+      return deferred("update", () =>
+        detail(env, uid, id, on === "1" ? "새 매물 알림을 켰습니다." : "새 매물 알림을 껐습니다."),
+      );
     }
     case "del": {
-      const saved = await findSaved(env, uid, id);
+      const saved = await findSaved(env, uid, rest);
       if (!saved) return message("저장한 검색을 찾지 못했습니다.");
       return update(
-        view(`**${saved.name}** 검색을 지울까요?`, [row(button(`f:delok:${saved.id}`, "삭제", DANGER), button(`f:show:${saved.id}`, "취소"))]),
+        view(`**${saved.name}** 검색을 지울까요?`, [
+          row(button(`f:delok:${saved.id}`, "삭제", DANGER), button(`f:show:${saved.id}`, "취소")),
+        ]),
       );
     }
     case "delok":
-      await env.SITE.removeSearch(uid, Number(id));
+      await env.SITE.removeSearch(uid, Number(rest));
       return deferred("update", () => savedList(env, uid));
-    case "imp": {
-      if (!(await env.SITE.getUser(uid))) return update(consentView("fav"));
-      if (!(await env.SITE.linkStatus(uid)).linked) {
-        return newMessage(
-          noticeView("사이트 계정을 먼저 연결해 주세요. 연결 코드를 받아 사이트 프로필에 입력하면 됩니다.", button("me:link", "연결 코드 받기", PRIMARY)),
-        );
-      }
-      return deferred("update", async () => importView(await env.SITE.importSiteSearches(uid)));
-    }
     default:
       return null;
   }
 }
-
-/** 검색 화면의 저장 단추. 고치는 중이면 그 검색의 이름과 목표가를, 아니면 검색어나 분류를 이름으로 채운다. */
-export async function saveFromSearch(env, interaction) {
-  const uid = userIdOf(interaction);
-  if (!(await env.SITE.getUser(uid))) return newMessage(consentView("fav"));
-  const { query, sid } = stateOf(interaction);
-  const saved = sid ? await findSaved(env, uid, sid) : null;
-  const name = saved?.name ?? (query.keyword || (query.category.startsWith("group:") ? query.category.slice(6) : query.category));
-  return modal(saved ? `f:savem:${saved.id}` : "f:savem", saved ? "저장 검색 고치기" : "즐겨찾기에 저장", [
-    { id: "name", label: "이름", max: 30, value: name },
-    {
-      id: "target",
-      label: "목표가 (개당, 이하면 DM 알림)",
-      required: false,
-      max: 14,
-      value: saved?.targetPrice ? String(saved.targetPrice) : "",
-      placeholder: "예: 4300",
-    },
-  ]);
-}
-
-/** 저장 검색 화면의 입력창 제출(f:savem, f:metam). */
-export async function savedModal(env, interaction, act, rest, fields) {
-  const uid = userIdOf(interaction);
-  const target = parsePrice(fields.target);
-  if (target === null) return message("목표가는 숫자로 입력해 주세요.");
-  const name = String(fields.name ?? "").trim();
-  const { query } = stateOf(interaction);
-
-  if (act === "savem") {
-    const id = rest ? Number(rest) : undefined;
-    return deferred("update", async () => {
-      const { search, created } = await env.SITE.saveSearch(uid, { ...(id ? { id } : {}), ...query, name, targetPrice: target ?? 0 });
-      const note = id ? "고쳤습니다." : created ? "즐겨찾기에 저장했습니다." : `같은 조건이 "${search.name}" 이름으로 이미 저장돼 있습니다.`;
-      return detail(env, uid, search.id, note);
-    });
-  }
-  if (act === "metam") {
-    const saved = await findSaved(env, uid, rest);
-    if (!saved) return message("저장한 검색을 찾지 못했습니다.");
-    return deferred("update", async () => {
-      await env.SITE.saveSearch(uid, { id: saved.id, ...saved.query, name, targetPrice: target ?? 0 });
-      return detail(env, uid, saved.id, "고쳤습니다.");
-    });
-  }
-  return null;
-}
-

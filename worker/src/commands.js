@@ -1,6 +1,6 @@
 import { editOriginal } from "./discord.js";
-import { saveFromSearch, savedComponent, savedList, savedModal } from "./saved.js";
-import { EMPTY_QUERY, conditionComponent, openSearch, searchComponent, searchModal } from "./search.js";
+import { openPrice, priceComponent, priceModal, priceModalSubmit } from "./price.js";
+import { savedComponent, savedList } from "./saved.js";
 import {
   deferred,
   fieldsOf,
@@ -49,17 +49,27 @@ const PERSONAL_TARGETS = new Set(["fav", "ab", "set", "me"]);
 /** 사이트 Worker 가 사용자에게 보여 줘도 되는 이유로 던진 오류. 나머지는 일반 안내로 바꾼다. */
 const SHOWN_ERRORS = /즐겨찾기|목표 가격|동의|검색어나 분류|이미 저장|찾지 못했|조건|숫자 범위|사이트에서|경매장|R 또는 S|펫 정보/;
 
-/** 디스코드에 등록하는 명령. `/마비쿠마` 하나로 열고 나머지는 모두 화면의 버튼과 메뉴로 한다. */
+/** 명령을 쓸 수 있는 설치 방식: 서버에 설치(0), 사용자 계정에 설치(1). */
+const INSTALL_GUILD_AND_USER = [0, 1];
+/** 명령을 쓸 수 있는 곳: 서버(0), 봇과의 DM(1), 사용자 설치로 들어간 DM·그룹 DM(2). */
+const ANYWHERE = [0, 1, 2];
+
+/**
+ * 디스코드에 등록하는 명령. `/마비쿠마` 하나로 열고 나머지는 모두 화면의 버튼과 메뉴로 한다.
+ * 개인 기능뿐이라 서버에 들이지 않고 사용자 계정에 설치해도 쓸 수 있게 한다(설치 방식을 비우면 등록 당시 앱 설정을 따라간다).
+ */
 export const COMMANDS = [
   {
     type: 1,
     name: "마비쿠마",
     description: "마비쿠마 메뉴 열기",
+    integration_types: INSTALL_GUILD_AND_USER,
+    contexts: ANYWHERE,
     options: [
       {
         type: STRING,
         name: "아이템",
-        description: "바로 검색할 아이템 (비우면 메뉴가 열립니다)",
+        description: "바로 시세를 볼 아이템 (비우면 메뉴가 열립니다)",
         autocomplete: true,
       },
     ],
@@ -85,8 +95,10 @@ async function openTarget(env, uid, target, now) {
       const user = await env.SITE.getUser(uid);
       return update(menuView(user ? await overview(env, uid, user) : null));
     }
+    // 예전 메뉴의 경매장 검색 단추도 시세 보기로 잇는다.
     case "search":
-      return deferred("update", () => openSearch(env, EMPTY_QUERY));
+    case "price":
+      return priceModal();
     case "erin":
       return update(erinView(now));
     case "fav":
@@ -197,10 +209,10 @@ async function componentResponse(env, interaction, now) {
       await env.SITE.registerUser(uid, CONSENT_VERSION);
       return openTarget(env, uid, rest, now);
     case "q":
-      result = act === "save" ? await saveFromSearch(env, interaction) : await searchComponent(env, interaction, act, values);
+      // 봇의 경매장 검색 화면(q:, k:)은 뺐다. 예전 메시지의 단추는 만료로 안내한다.
       break;
-    case "k":
-      result = await conditionComponent(env, interaction, act, rest, values);
+    case "p":
+      result = await priceComponent(env, interaction, act, rest, values);
       break;
     case "f":
       result = await savedComponent(env, interaction, act, rest, values);
@@ -229,12 +241,7 @@ async function modalSubmit(env, interaction) {
   const [namespace, act, ...parts] = String(interaction.data.custom_id).split(":");
   const rest = parts.join(":");
 
-  if (namespace === "q" || namespace === "k") {
-    return (await searchModal(env, interaction, namespace, act, rest, fields)) ?? message(EXPIRED);
-  }
-  if (namespace === "f") {
-    return (await savedModal(env, interaction, act, rest, fields)) ?? message(EXPIRED);
-  }
+  if (namespace === "p" && act === "m") return priceModalSubmit(env, interaction, fields);
   if (namespace === "s" && act === "custom") {
     const start = Number(fields.start);
     const end = Number(fields.end);
@@ -252,10 +259,7 @@ async function slash(env, interaction) {
   const uid = userIdOf(interaction);
   const name = String(interaction.data.options?.find((option) => option.name === "아이템")?.value ?? "").trim();
   if (name !== "") {
-    return deferred("new", async () => {
-      const exact = (await env.SITE.searchItems(name).catch(() => [])).includes(name);
-      return openSearch(env, { ...EMPTY_QUERY, keyword: name, exact });
-    });
+    return deferred("new", () => openPrice(env, uid, name));
   }
   const user = await env.SITE.getUser(uid);
   return newMessage(menuView(user ? await overview(env, uid, user) : null));

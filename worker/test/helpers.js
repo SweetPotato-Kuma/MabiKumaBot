@@ -140,15 +140,27 @@ export function fakeSite() {
       calls.push(["saveSearch", id, input]);
       if (input.name === "너무많음") throw new Error("즐겨찾기는 20개까지 둘 수 있습니다.");
       const list = searches.get(id) ?? [];
-      const { id: searchId, name, targetPrice, ...query } = input;
+      const { id: searchId, name, targetPrice, alertOn, ...query } = input;
       let search = list.find((each) => each.id === searchId);
       if (!search) {
-        search = { id: nextId++, name, query, targetPrice: targetPrice || null, conditions: [] };
+        search = {
+          id: nextId++,
+          name,
+          query,
+          targetPrice: targetPrice || null,
+          alertOn: alertOn !== false,
+          conditions: query.filterKey ? ["세공 스매시 대미지 5레벨 이상"] : [],
+          url: `https://mabi.spkuma.com/auction?keyword=${encodeURIComponent(query.keyword ?? "")}&ref=bot`,
+        };
         list.push(search);
         searches.set(id, list);
         return { search, created: true };
       }
-      Object.assign(search, { name: name ?? search.name, query, targetPrice: targetPrice || null });
+      Object.assign(search, {
+        name: name ?? search.name,
+        query,
+        ...(typeof alertOn === "boolean" ? { alertOn } : {}),
+      });
       return { search, created: false };
     },
     async removeSearch(id, searchId) {
@@ -160,13 +172,33 @@ export function fakeSite() {
       calls.push(["searchesStatus", id]);
       return {
         checkedAt: NOW,
-        searches: (searches.get(id) ?? []).map((search) => ({ ...search, unavailable: false, lowest: 4290, total: 1, checkedAt: NOW })),
+        searches: (searches.get(id) ?? []).map((search) => ({
+          ...search,
+          unavailable: false,
+          lowest: 4290,
+          total: 1,
+          icon: "https://icons.spkuma.com/f711.webp",
+          checkedAt: NOW,
+        })),
       };
     },
     async searchDetail(id, searchId) {
       const search = (searches.get(id) ?? []).find((each) => each.id === searchId);
       if (!search) throw new Error("저장한 검색을 찾지 못했습니다.");
-      return { search, result: searchResult(search.query) };
+      return { search, result: { ...searchResult(search.query), icon: "https://icons.spkuma.com/f711.webp" } };
+    },
+    async setSearchAlert(id, searchId, on) {
+      calls.push(["setSearchAlert", id, searchId, on]);
+      const search = (searches.get(id) ?? []).find((each) => each.id === searchId);
+      if (!search) throw new Error("저장한 검색을 찾지 못했습니다.");
+      search.alertOn = on;
+      return search;
+    },
+    cards: {},
+    async priceCard(name) {
+      calls.push(["priceCard", name]);
+      if (site.fail) throw site.fail;
+      return site.cards[name] ?? null;
     },
     async dueArbeitAlerts(from, to) {
       calls.push(["dueArbeitAlerts", from, to]);

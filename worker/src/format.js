@@ -44,24 +44,32 @@ export function arbeitMessages(alert) {
   );
 }
 
-/** 목표가에 닿은 저장 검색 하나의 카드. 제목을 누르면 사이트에서 같은 검색이 열린다. */
+/**
+ * 새 매물이 올라온 저장 검색 하나의 카드. 제목 줄 앞에 아이콘을 작게 붙이고, 누르면 사이트에서 같은 검색이 열린다.
+ * 새 매물은 싼 순으로 다섯 개까지 적고 나머지는 개수만 적는다.
+ */
 export function searchAlertCard(search) {
-  const items = search.items.slice(0, 3).flatMap((item, index) => {
+  const items = search.items.slice(0, 5).flatMap((item, index) => {
     const count = item.count > 1 ? ` ×${won(item.count)}` : "";
     const head = `**${index + 1}.** ${won(item.price)} ${item.name}${count}`;
     return item.notes?.length > 0 ? [head, `　${item.notes.join(" / ")}`] : [head];
   });
+  const rest = search.newCount - Math.min(search.items.length, 5);
   return {
-    title: `목표 가격 도달: ${search.name}`.slice(0, 256),
-    url: search.url,
+    author: {
+      name: `${search.name} · 새 매물 ${won(search.newCount)}개`.slice(0, 256),
+      url: search.url,
+      ...(search.icon ? { icon_url: search.icon } : {}),
+    },
     color: ACCENT,
     description: [
-      `최저 **${won(search.price)}** (목표 ${won(search.target)}), 조건에 맞는 매물 ${won(search.total)}개`,
+      ...(search.conditions?.length > 0 ? [`-# ${search.conditions.join(", ")}`] : []),
       ...items,
+      ...(rest > 0 ? [`외 ${won(rest)}개`] : []),
     ]
       .join("\n")
       .slice(0, 4000),
-    footer: { text: "넥슨 경매장 기준. 알림 방식은 /마비쿠마 의 알림 설정에서 바꿀 수 있습니다." },
+    footer: { text: "넥슨 경매장 기준" },
     timestamp: new Date(search.checkedAt).toISOString(),
   };
 }
