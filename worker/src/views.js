@@ -1,3 +1,4 @@
+import { hourLabel } from "./daily.js";
 import { erinClock, formatErinClock, formatShopReset, msUntilShopReset } from "./erin.js";
 import { relativeTime } from "./format.js";
 import {
@@ -147,7 +148,7 @@ export function describeSettings(settings) {
   parts.push(
     settings.quiet ? `조용한 시간 ${settings.quiet.start}시~${settings.quiet.end}시` : "조용한 시간 없음",
   );
-  parts.push(Number.isInteger(settings.daily) ? `매일 알림 ${settings.daily}시` : "매일 알림 꺼짐");
+  parts.push(Number.isInteger(settings.daily) ? `매일 알림 ${hourLabel(settings.daily)}` : "매일 알림 꺼짐");
   if (settings.disabledReason === "dm-failed") {
     parts.push("DM을 보낼 수 없어 멈춤 (DM을 허용한 뒤 일시정지를 끄세요)");
   } else if (settings.paused) {
@@ -177,7 +178,7 @@ export function settingsView(settings) {
     [
       "**알림 설정**",
       describeSettings(settings),
-      "-# 시간은 한국 시각 기준이며 아르바이트와 새 매물 알림 모두에 적용됩니다.",
+      "-# 시간은 한국 시각 기준이며 아르바이트, 새 매물, 자정 전 알림에 적용됩니다.",
     ].join("\n"),
     [
       row(
